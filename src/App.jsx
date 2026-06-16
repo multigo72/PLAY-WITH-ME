@@ -442,7 +442,10 @@ function useGameLibrary() {
   useEffect(() => {
     if (!loaded) return;
     for (const g of games) {
-      if (g.imageSource === "amazon") continue;
+      // Skip cards that already have an image we don't want to clobber:
+      //   "amazon" — backfilled successfully from Firecrawl
+      //   "local"  — manually set image (e.g. uploaded JPEG in public/)
+      if (g.imageSource === "amazon" || g.imageSource === "local") continue;
       if (backfilledRef.current.has(g.id)) continue;
       backfilledRef.current.add(g.id);
       // Flip loading state immediately so the UI shows the shimmer.
