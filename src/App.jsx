@@ -56,7 +56,7 @@ const F = {
 // ─── Categories + emoji map ──────────────────────────────────────────────
 const CATEGORIES = [
   "Board Game", "Card Game", "Puzzle", "Toy",
-  "Outside", "Video Game", "Other",
+  "Active", "Video Game", "Other",
 ];
 
 const CATEGORY_EMOJI = {
@@ -64,7 +64,7 @@ const CATEGORY_EMOJI = {
   "Card Game": "🃏",
   "Puzzle": "🧩",
   "Toy": "🧸",
-  "Outside": "🌳",
+  "Active": "🌳",
   "Video Game": "🎮",
   "Other": "🎯",
 };
@@ -286,6 +286,7 @@ function useGameLibrary() {
     if ("imageAttribution" in patch) dbPatch.attribution = patch.imageAttribution;
     if ("players" in patch) dbPatch.players = patch.players;
     if ("ages" in patch) dbPatch.ages = patch.ages;
+    if ("favorite" in patch) dbPatch.favorite = patch.favorite;
     if (Object.keys(dbPatch).length === 0) return;
     const { error } = await supabase.from("games").update(dbPatch).eq("id", id);
     if (error) {
@@ -490,7 +491,9 @@ function useGameLibrary() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded, games.length]);
 
-  return { games, loaded, addOrUpdate, remove, refreshImage, rename };
+  const setFavorite = (id, value) => patchById(id, { favorite: value });
+
+  return { games, loaded, addOrUpdate, remove, refreshImage, rename, setFavorite };
 }
 
 // ─── Status bar (cosmetic) ───────────────────────────────────────────────
@@ -528,7 +531,7 @@ const REEL_POOL = [
 
 const ITEM_HEIGHT = 107;
 
-function SlotReel({ items, spinning, targetIndex, delay, initialIndex = 0 }) {
+function SlotReel({ items, spinning, targetIndex, delay, onClick }) {
   // Build a long strip by repeating the items 6x for smooth spin
   const strip = useMemo(() => {
     const out = [];
@@ -536,7 +539,10 @@ function SlotReel({ items, spinning, targetIndex, delay, initialIndex = 0 }) {
     return out;
   }, [items]);
 
-  const [offset, setOffset] = useState(-ITEM_HEIGHT * (initialIndex % items.length));
+  // Resting position is driven by targetIndex so that — even after the reel
+  // unmounts (when a game is selected) and remounts (on "Done") — it shows the
+  // game that targets[i] points at, keeping it in sync with the click handler.
+  const [offset, setOffset] = useState(-ITEM_HEIGHT * (targetIndex % items.length));
   const [transition, setTransition] = useState("none");
 
   useEffect(() => {
@@ -558,16 +564,19 @@ function SlotReel({ items, spinning, targetIndex, delay, initialIndex = 0 }) {
   }, [spinning, targetIndex, delay, items.length]);
 
   return (
-    <div style={{
+    <div onClick={onClick} style={{
       position: "relative", width: 107, height: ITEM_HEIGHT,
       background: C.white, borderRadius: 12,
       overflow: "hidden",
+      cursor: onClick ? "pointer" : "default",
     }}>
-      <div style={{
-        transform: `translateY(${offset}px)`,
-        transition,
-        display: "flex", flexDirection: "column",
-      }}>
+      <div
+        style={{
+          transform: `translateY(${offset}px)`,
+          transition,
+          display: "flex", flexDirection: "column",
+        }}
+      >
         {strip.map((it, i) => (
           <div key={i} style={{
             height: ITEM_HEIGHT, position: "relative", overflow: "hidden",
@@ -730,6 +739,23 @@ function TabBar({ tab, onChange }) {
   );
 }
 
+// ─── Filled lock icons (matching Figma "Action / lock" #858C94) ──────────
+function FilledLock({ color = "#858C94", size = 20 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill={color} xmlns="http://www.w3.org/2000/svg">
+      <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/>
+    </svg>
+  );
+}
+
+function FilledLockOpen({ color = "#858C94", size = 20 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill={color} xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 1C9.24 1 7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2H9V6c0-1.66 1.34-3 3-3s3 1.34 3 3h2c0-2.76-2.24-5-5-5zm0 16c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z"/>
+    </svg>
+  );
+}
+
 // ─── HOME ────────────────────────────────────────────────────────────────
 function HomeScreen({ library }) {
   const [spinning, setSpinning] = useState(false);
@@ -738,33 +764,71 @@ function HomeScreen({ library }) {
   const [locked, setLocked] = useState([false, false, false]);
   const [recent, setRecent] = useState([]);
   const [error, setError] = useState("");
+  const [selectedGame, setSelectedGame] = useState(null);
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [filterCategories, setFilterCategories] = useState(["All"]);
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
+
+  const availableCategories = useMemo(() => {
+    const inLibrary = new Set(library.map(g => g.category).filter(Boolean));
+    return CATEGORIES.filter(c => inLibrary.has(c));
+  }, [library]);
+
+  const filteredGames = useMemo(() => {
+    let src = library;
+    if (!filterCategories.includes("All")) {
+      src = src.filter(g => filterCategories.includes(g.category));
+    }
+    if (favoritesOnly) {
+      src = src.filter(g => g.favorite);
+    }
+    return src;
+  }, [library, filterCategories, favoritesOnly]);
 
   const pool = useMemo(() => {
-    if (library.length >= 3) {
-      return library.map(g => ({
+    const src = filteredGames.length >= 3 ? filteredGames : library;
+    if (src.length >= 3) {
+      return src.map(g => ({
         name: g.name,
         emoji: g.emoji || CATEGORY_EMOJI[g.category] || "🎲",
         imageUrl: (g.imageUrl && g.imageUrl !== FALLBACK_IMG) ? g.imageUrl : null,
       }));
     }
     return REEL_POOL;
-  }, [library]);
+  }, [filteredGames, library]);
+
+  const toggleCategory = (cat) => {
+    setFilterCategories(prev => {
+      if (cat === "All") return ["All"];
+      const withoutAll = prev.filter(c => c !== "All");
+      if (withoutAll.includes(cat)) {
+        const next = withoutAll.filter(c => c !== cat);
+        return next.length === 0 ? ["All"] : next;
+      }
+      return [...withoutAll, cat];
+    });
+  };
 
   const handleSpin = () => {
-    if (library.length === 0) { setError("Add some games first!"); return; }
+    const activeGames = filteredGames.length > 0 ? filteredGames : library;
+    if (activeGames.length === 0) { setError("Add some games first!"); return; }
     setError("");
     setPulse(true);
     setTimeout(() => setPulse(false), 400);
 
-    const t = [0, 1, 2].map(() => Math.floor(Math.random() * pool.length));
+    const t = [0, 1, 2].map(i => locked[i] ? targets[i] : Math.floor(Math.random() * pool.length));
     setSpinning(false);
     requestAnimationFrame(() => { setTargets(t); setSpinning(true); });
 
-    const winner = library[Math.floor(Math.random() * library.length)];
     setTimeout(() => {
       setSpinning(false);
-      setRecent(prev => [winner, ...prev].slice(0, 5));
     }, 1500 + 300 + 200);
+  };
+
+  // Record a reel selection: open its detail view and log it to Recent (latest 10).
+  const pickFromReel = (game) => {
+    setSelectedGame(game);
+    setRecent(prev => [game, ...prev].slice(0, 10));
   };
 
   const toggleLock = (i) => setLocked(prev => {
@@ -774,25 +838,26 @@ function HomeScreen({ library }) {
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", background: C.background, overflow: "auto" }}>
 
-      {/* Full-bleed hero header — photo with orange gradient overlay */}
+      {/* Full-bleed hero header — photo with orange gradient at top */}
       <div style={{ position: "relative", width: "100%", height: 240, flexShrink: 0, overflow: "hidden" }}>
+        {/* Photo */}
         <div style={{
           position: "absolute", inset: 0,
           backgroundImage: `url(https://images.unsplash.com/photo-1503454537195-1dcabb73ffb9?w=900&q=80)`,
           backgroundSize: "cover", backgroundPosition: "center 30%",
         }} />
-        {/* Gradient: transparent → #e67136 from 45% down */}
+        {/* Gradient: #e67136 at top → transparent at ~55% (matches Figma rotate-180 gradient) */}
         <div style={{
           position: "absolute", inset: 0,
-          background: "linear-gradient(to bottom, rgba(230,113,54,0) 45%, #e67136 100%)",
+          background: "linear-gradient(to bottom, #e67136 0%, rgba(230,113,54,0) 55%)",
         }} />
-        {/* Status bar on top of image */}
+        {/* Status bar overlaid on gradient */}
         <div style={{ position: "relative" }}>
           <StatusBar tone="light" />
         </div>
-        {/* "Play With Me" title centered near bottom */}
+        {/* "Play With Me" title — centered below status bar, in the orange zone */}
         <div style={{
-          position: "absolute", bottom: 18, left: 0, right: 0, textAlign: "center",
+          position: "absolute", top: 40, left: 0, right: 0, textAlign: "center",
         }}>
           <span style={{
             fontFamily: F.display, fontWeight: 800, fontSize: 24,
@@ -801,13 +866,56 @@ function HomeScreen({ library }) {
         </div>
       </div>
 
-      {/* Pick a Game card */}
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "24px 0 0" }}>
-        <div style={{
-          width: 380, borderRadius: 24,
+      {selectedGame ? (
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "24px 24px 0" }}>
+          <p style={{
+            fontFamily: F.display, fontWeight: 700, fontSize: 20,
+            color: C.primary, textAlign: "center", margin: "0 0 24px",
+          }}>Its Time For - {selectedGame.name}!</p>
+          <div style={{
+            width: 380, height: 380, borderRadius: 50,
+            overflow: "hidden", position: "relative", background: C.borderSoft, flexShrink: 0,
+          }}>
+            {selectedGame.imageUrl ? (
+              <div style={{
+                position: "absolute", inset: 0,
+                backgroundImage: `url("${selectedGame.imageUrl}")`,
+                backgroundSize: "cover", backgroundPosition: "center",
+              }} />
+            ) : (
+              <div style={{
+                position: "absolute", inset: 0,
+                display: "flex", flexDirection: "column",
+                alignItems: "center", justifyContent: "center",
+              }}>
+                <span style={{ fontSize: 80 }}>{selectedGame.emoji}</span>
+                <span style={{ fontFamily: F.display, fontWeight: 700, fontSize: 20, color: C.textDark, marginTop: 8 }}>
+                  {selectedGame.name}
+                </span>
+              </div>
+            )}
+          </div>
+          <button
+            onClick={() => setSelectedGame(null)}
+            style={{
+              marginTop: 24, marginBottom: 24,
+              width: 380, height: 48, borderRadius: 45,
+              background: "none", border: `1px solid ${C.primary}`,
+              cursor: "pointer", fontFamily: F.display, fontWeight: 800,
+              fontSize: 16, color: C.primary,
+            }}
+          >Done</button>
+        </div>
+      ) : (
+        <>
+          {/* Pick a Game card */}
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "24px 0 0" }}>
+            <div style={{
+              width: 380, borderRadius: 24,
           background: "#f7f5f0",
           boxShadow: "0 0 33.5px rgba(230,113,54,0.4)",
           position: "relative",
+          overflow: "hidden",
         }}>
           {/* Card header row */}
           <div style={{
@@ -817,12 +925,21 @@ function HomeScreen({ library }) {
             <span style={{
               fontFamily: F.display, fontWeight: 700, fontSize: 20, color: C.primary,
             }}>Pick a Game</span>
-            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <button
+              onClick={() => setFilterOpen(true)}
+              style={{
+                display: "flex", alignItems: "center", gap: 4,
+                background: "none", border: "none", cursor: "pointer",
+                padding: 8, margin: -8,
+              }}
+            >
               <span style={{
                 fontFamily: F.display, fontWeight: 700, fontSize: 12, color: C.primary,
               }}>Filter Options</span>
-              <ChevronDown size={20} color={C.primary} strokeWidth={2.5} />
-            </div>
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M10 0C15.52 0 20 4.48 20 10C20 15.52 15.52 20 10 20C4.48 20 0 15.52 0 10C0 4.48 4.48 0 10 0ZM7.20996 9C6.76001 9.00006 6.54037 9.54037 6.86035 9.86035L9.65039 12.6504C9.84044 12.84 10.1605 12.8395 10.3604 12.6396L13.1504 9.84961C13.4698 9.53955 13.2496 9 12.7998 9H7.20996Z" fill="#E67136"/>
+              </svg>
+            </button>
           </div>
 
           {/* Divider */}
@@ -840,7 +957,7 @@ function HomeScreen({ library }) {
                   spinning={spinning && !locked[i]}
                   targetIndex={targets[i]}
                   delay={i * 150}
-                  initialIndex={i}
+                  onClick={() => { if (!spinning) pickFromReel(pool[targets[i] % pool.length]); }}
                 />
                 {/* Lock / unlock toggle */}
                 <button
@@ -854,7 +971,7 @@ function HomeScreen({ library }) {
                   aria-label={locked[i] ? "Unlock reel" : "Lock reel"}
                 >
                   {locked[i]
-                    ? <Lock size={20} color="#858C94" strokeWidth={2} />
+                    ? <FilledLock size={20} color="#858C94" />
                     : <LockOpen size={20} color="#858C94" strokeWidth={2} />
                   }
                 </button>
@@ -873,6 +990,107 @@ function HomeScreen({ library }) {
               transition: "transform 0.2s cubic-bezier(.4,1.5,.5,1)",
             }}>Spin</button>
           </div>
+
+          {/* Filter overlay panel */}
+          {filterOpen && (
+            <div style={{
+              position: "absolute", inset: 0,
+              background: "#f7f5f0", borderRadius: 24, zIndex: 10,
+              display: "flex", flexDirection: "column",
+              overflowY: "auto",
+            }}>
+              {/* Header */}
+              <div style={{
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+                padding: "0 16px", height: 60, flexShrink: 0,
+              }}>
+                <span style={{ fontFamily: F.display, fontWeight: 700, fontSize: 20, color: C.primary }}>
+                  Pick a Game
+                </span>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ fontFamily: F.display, fontWeight: 700, fontSize: 12, color: C.primary }}>
+                    Filter Options
+                  </span>
+                  <button
+                    onClick={() => setFilterOpen(false)}
+                    style={{
+                      width: 24, height: 24, borderRadius: 12,
+                      background: C.primary, border: "none", cursor: "pointer",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      padding: 0, flexShrink: 0,
+                    }}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                      <path d="M1 1L11 11M11 1L1 11" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+
+              {/* Divider */}
+              <div style={{ height: 1, background: "rgba(0,0,0,0.08)", margin: "0 16px", flexShrink: 0 }} />
+
+              {/* Subtitle */}
+              <div style={{ padding: "14px 16px 0", flexShrink: 0 }}>
+                <span style={{ fontFamily: F.display, fontWeight: 500, fontSize: 14, color: C.primary }}>
+                  Pick what you want to see in the windows
+                </span>
+              </div>
+
+              {/* Favorites toggle row */}
+              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 16px", flexShrink: 0 }}>
+                {/* Heart-thumb toggle — matches Figma 80:4251/4252 exactly */}
+                <svg
+                  width="46" height="23" viewBox="0 0 46 23" fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
+                  onClick={() => setFavoritesOnly(prev => !prev)}
+                  style={{ cursor: "pointer", flexShrink: 0 }}
+                >
+                  {/* Track — gray pill, shifts 10px when thumb slides right */}
+                  <rect x={favoritesOnly ? 0 : 10} y="4" width="36" height="16" rx="8" fill="#DADEE3"/>
+                  {/* Heart thumb — slides left→right, gray→orange */}
+                  <path
+                    d="M14.754 22.3271C13.7663 23.2264 12.2459 23.2264 11.2583 22.3141L11.1154 22.1838C4.29299 15.9929 -0.164294 11.9395 0.00464059 6.88251C0.0826106 4.66682 1.21318 2.54237 3.04547 1.29116C6.47615 -1.05486 10.7125 0.039953 12.9996 2.72484C15.2868 0.039953 19.5231 -1.06789 22.9538 1.29116C24.7861 2.54237 25.9167 4.66682 25.9946 6.88251C26.1766 11.9395 21.7063 15.9929 14.8839 22.2098L14.754 22.3271Z"
+                    fill={favoritesOnly ? "#E67136" : "#A2A2A2"}
+                    style={{
+                      transform: favoritesOnly ? "translateX(20px)" : "translateX(0px)",
+                      transition: "transform 0.2s ease, fill 0.2s ease",
+                    }}
+                  />
+                </svg>
+                <span style={{ fontFamily: F.display, fontWeight: 500, fontSize: 14, color: C.primary }}>
+                  Only Show Parent Favorites
+                </span>
+              </div>
+
+              {/* Category buttons */}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "12px 12px", padding: "0 16px 24px" }}>
+                {["All", ...availableCategories].map(cat => {
+                  const isActive = filterCategories.includes(cat);
+                  return (
+                    <button
+                      key={cat}
+                      onClick={() => toggleCategory(cat)}
+                      style={{
+                        height: 40, padding: "0 17px", borderRadius: 14,
+                        border: "1px solid #e67136",
+                        background: isActive ? C.primary : "rgba(255,255,255,0.4)",
+                        color: isActive ? "#fff" : C.primary,
+                        fontFamily: F.nav, fontWeight: 700, fontSize: 13,
+                        cursor: "pointer", whiteSpace: "nowrap",
+                        boxShadow: isActive
+                          ? "0 2px 4px rgba(0,0,0,0.05)"
+                          : "0 2px 8px rgba(0,0,0,0.05)",
+                        transition: "all 0.15s",
+                      }}
+                    >
+                      {cat}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
 
         {error && (
@@ -880,8 +1098,10 @@ function HomeScreen({ library }) {
         )}
       </div>
 
-      {/* Recent carousel */}
-      <RecentCarousel recent={recent} />
+          {/* Recent carousel */}
+          <RecentCarousel recent={recent} />
+        </>
+      )}
 
       <div style={{ flex: 1 }} />
     </div>
@@ -944,7 +1164,7 @@ function PhotoCredit({ source, attribution }) {
   );
 }
 
-function GameCard({ game, onEdit, onDelete, onRefresh, onRename }) {
+function GameCard({ game, onEdit, onDelete, onRefresh, onRename, onFavorite }) {
   // Inline title editing state. Click the title to start editing;
   // Enter or blur commits, Escape cancels. Falls back to a plain
   // <h3> when onRename isn't provided (keeps the card usable in
@@ -1088,20 +1308,23 @@ function GameCard({ game, onEdit, onDelete, onRefresh, onRename }) {
             >{game.name}</h3>
           )}
         </div>
-        {/* Meta row — Players + Ages flow naturally. */}
-        <div style={{
-          marginTop: 6,
-          display: "flex", alignItems: "center", gap: 30,
-        }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <Users size={16} color="#5a5e5a" strokeWidth={2} />
-            <span style={metaText}>{game.players || "- Players"}</span>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ fontSize: 16, lineHeight: 1 }}>😊</span>
-            <span style={metaText}>{game.ages || "Ages -"}</span>
-          </div>
-        </div>
+        {/* Favorite row */}
+        <button
+          onClick={() => onFavorite && onFavorite(game.id, !game.favorite)}
+          style={{
+            marginTop: 6,
+            display: "flex", alignItems: "center", gap: 10,
+            background: "none", border: "none", cursor: "pointer", padding: 0,
+          }}
+          aria-label={game.favorite ? "Remove from favorites" : "Select as Favorite"}
+        >
+          <svg width="20" height="18" viewBox="0 0 20 18" fill={game.favorite ? "#E67136" : "none"} xmlns="http://www.w3.org/2000/svg">
+            <path d="M10.3828 2.45313C12.0046 0.516285 14.9788 -0.252934 17.3701 1.41992L17.3711 1.4209C18.6445 2.3056 19.4412 3.81898 19.4961 5.40332V5.4043C19.5601 7.21643 18.8118 8.88423 17.3506 10.7334C16.249 12.1275 14.771 13.59 12.9893 15.2646L11.1094 17.0146L11.0107 17.1055L11.0098 17.1064C10.4422 17.6323 9.57056 17.6321 9.00293 17.0986L9 17.0967L8.89063 16.9951L8.88965 16.9941L7.00977 15.25C5.22912 13.5816 3.75274 12.1223 2.65234 10.7305C1.19282 8.88431 0.443586 7.21613 0.50293 5.40332C0.557812 3.81897 1.35449 2.30561 2.62793 1.4209C5.02077 -0.243868 7.99545 0.517662 9.61621 2.45313L10 2.91113L10.3828 2.45313Z" stroke={game.favorite ? "#E67136" : "#5A5E5A"} strokeWidth="1"/>
+          </svg>
+          <span style={{ fontFamily: F.display, fontWeight: 500, fontSize: 14, color: "#5a5e5a" }}>
+            Select as Favorite
+          </span>
+        </button>
 
         {/* Edit + Trash icons absolutely positioned to match Figma node
             36:2120 exactly. The Figma coords are left:261, top:25 within
@@ -1142,7 +1365,7 @@ const metaText = {
   whiteSpace: "nowrap",
 };
 
-function LibraryScreen({ library, onAdd, onEdit, onDelete, onRefresh, onRename }) {
+function LibraryScreen({ library, onAdd, onEdit, onDelete, onRefresh, onRename, onFavorite }) {
   const [filter, setFilter] = useState("All");
   const filtered = filter === "All"
     ? library
@@ -1217,7 +1440,7 @@ function LibraryScreen({ library, onAdd, onEdit, onDelete, onRefresh, onRename }
         display: "flex", flexDirection: "column", alignItems: "center", gap: 16,
       }}>
         {filtered.map(g => (
-          <GameCard key={g.id} game={g} onEdit={onEdit} onDelete={onDelete} onRefresh={onRefresh} onRename={onRename} />
+          <GameCard key={g.id} game={g} onEdit={onEdit} onDelete={onDelete} onRefresh={onRefresh} onRename={onRename} onFavorite={onFavorite} />
         ))}
 
         {/* Add new card */}
@@ -1255,7 +1478,6 @@ function EditGameScreen({ game, onSave, onCancel }) {
   const [name, setName] = useState(game?.name || "");
   const [category, setCategory] = useState(game?.category || "Board Game");
   const [notes, setNotes] = useState(game?.notes || "");
-  const [favorite, setFavorite] = useState(game?.favorite || false);
   const [error, setError] = useState("");
 
   const handleSave = () => {
@@ -1276,7 +1498,7 @@ function EditGameScreen({ game, onSave, onCancel }) {
       category,
       emoji: CATEGORY_EMOJI[category],
       notes: trimmedNotes,
-      favorite,
+      favorite: game?.favorite || false,
       // Dash placeholders show through until Firecrawl fills them in
       // via resolveAndPatch. If Amazon's search snippet doesn't include
       // a player count / age range, the dashes stay so the UI signals
@@ -1293,6 +1515,11 @@ function EditGameScreen({ game, onSave, onCancel }) {
   };
 
   const isValid = name.trim().length > 0;
+  const isDirty = !game
+    ? isValid
+    : (name.trim() !== (game.name || "").trim()
+      || category !== (game.category || "Board Game")
+      || notes.trim() !== (game.notes || "").trim());
 
   return (
     <div style={{
@@ -1346,34 +1573,6 @@ function EditGameScreen({ game, onSave, onCancel }) {
           }}>{error}</div>
         )}
 
-        {/* Favorite toggle */}
-        <button
-          type="button"
-          onClick={() => setFavorite(f => !f)}
-          style={{
-            display: "flex", alignItems: "center", gap: 16,
-            marginTop: 24, background: "none", border: "none",
-            cursor: "pointer", padding: 0,
-          }}
-        >
-          <span style={{
-            width: 40, height: 40, borderRadius: 14,
-            background: favorite ? C.primary : "rgba(255,255,255,0.22)",
-            border: favorite ? "none" : "1px solid #ffffff",
-            boxShadow: favorite ? "none" : "0 2px 8px rgba(0,0,0,0.05)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            transition: "all 0.15s",
-          }}>
-            <svg width="24" height="24" viewBox="0 0 24 24" fill={favorite ? "#ffffff" : C.primary} xmlns="http://www.w3.org/2000/svg">
-              <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
-            </svg>
-          </span>
-          <span style={{
-            fontFamily: F.body, fontWeight: 700, fontSize: 13,
-            color: C.textDark,
-          }}>Select as Favorite</span>
-        </button>
-
         {/* Category */}
         <label style={{ ...fieldLabel, marginTop: 24 }}>Category</label>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 12 }}>
@@ -1392,8 +1591,7 @@ function EditGameScreen({ game, onSave, onCancel }) {
                   : "0 2px 8px rgba(0,0,0,0.05)",
                 transition: "all 0.15s",
               }}>
-                <span>{CATEGORY_EMOJI[cat]}</span>
-                <span>{cat}</span>
+                {cat}
               </button>
             );
           })}
@@ -1417,12 +1615,13 @@ function EditGameScreen({ game, onSave, onCancel }) {
         {/* Submit */}
         <button onClick={handleSave} disabled={!isValid} style={{
           marginTop: 26, width: "100%", height: 58, borderRadius: 16,
-          background: isValid ? "#fac2a7" : C.primarySoft,
-          border: "none", cursor: isValid ? "pointer" : "not-allowed",
+          background: (isValid && isDirty) ? C.primary : "#fac2a7",
+          border: "none",
+          cursor: (isValid && isDirty) ? "pointer" : isValid ? "default" : "not-allowed",
           color: C.white,
           fontFamily: F.body, fontWeight: 700, fontSize: 16,
           textAlign: "center",
-          transition: "all 0.15s",
+          transition: "all 0.2s",
         }}>{game ? "Save Changes" : "Add to Library"}</button>
       </div>
     </div>
@@ -1446,7 +1645,7 @@ const textInput = {
 export default function App() {
   const [tab, setTab] = useState("home"); // 'home' | 'library'
   const [editing, setEditing] = useState(null); // null | 'new' | game object
-  const { games, addOrUpdate, remove, refreshImage, rename } = useGameLibrary();
+  const { games, addOrUpdate, remove, refreshImage, rename, setFavorite } = useGameLibrary();
 
   const onSave = (g, options) => {
     addOrUpdate(g, options);
@@ -1505,6 +1704,7 @@ export default function App() {
               onDelete={remove}
               onRefresh={refreshImage}
               onRename={rename}
+              onFavorite={setFavorite}
             />
         }
       </div>
