@@ -638,7 +638,8 @@ function SlotReel({ items, spinning, targetIndex, delay, onClick }) {
 }
 
 function RecentCarousel({ recent }) {
-  if (!recent.length) return null;
+  // Always rendered — the section stays visible even before the first pick,
+  // and persists the last 10 reel selections (never clears).
   return (
     <div style={{ padding: "24px 0 0 24px" }}>
       <span style={{
@@ -649,7 +650,14 @@ function RecentCarousel({ recent }) {
         className="hide-scrollbar"
         style={{ display: "flex", gap: 14, overflowX: "auto", paddingRight: 24, paddingBottom: 4 }}
       >
-        {recent.map((g, i) => (
+        {recent.length === 0 ? (
+          <div style={{
+            flexShrink: 0, height: 107, display: "flex", alignItems: "center",
+            color: "#9b938a", fontFamily: F.body, fontSize: 13,
+          }}>
+            Pick a game from the reels and it&rsquo;ll show up here.
+          </div>
+        ) : recent.map((g, i) => (
           <div key={i} style={{
             flexShrink: 0, width: 170, height: 107, borderRadius: 12,
             position: "relative", overflow: "hidden",
@@ -762,7 +770,16 @@ function HomeScreen({ library }) {
   const [targets, setTargets] = useState([0, 1, 2]);
   const [pulse, setPulse] = useState(false);
   const [locked, setLocked] = useState([false, false, false]);
-  const [recent, setRecent] = useState([]);
+  const [recent, setRecent] = useState(() => {
+    // Restore the last 10 picks so the Recent section survives reloads / tab switches.
+    try {
+      const raw = localStorage.getItem("pwm:recent");
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr.slice(0, 10) : [];
+    } catch {
+      return [];
+    }
+  });
   const [error, setError] = useState("");
   const [selectedGame, setSelectedGame] = useState(null);
   const [filterOpen, setFilterOpen] = useState(false);
@@ -796,6 +813,15 @@ function HomeScreen({ library }) {
     }
     return REEL_POOL;
   }, [filteredGames, library]);
+
+  // Persist the Recent list so the last 10 picks don't disappear on reload.
+  useEffect(() => {
+    try {
+      localStorage.setItem("pwm:recent", JSON.stringify(recent));
+    } catch {
+      // Ignore storage failures (private mode / quota) — Recent just won't persist.
+    }
+  }, [recent]);
 
   const toggleCategory = (cat) => {
     setFilterCategories(prev => {
