@@ -373,6 +373,30 @@ function useGameLibrary() {
     }
   };
 
+  // Inline-edit the card title. Trims, no-ops if empty / unchanged.
+  // Does NOT re-fetch the image — that's an explicit refresh-button
+  // action, so renaming preserves whatever's currently on the card
+  // (matters especially for image_source = "local" cards).
+  const rename = async (id, nextName) => {
+    const clean = (nextName ?? "").trim();
+    if (!clean) return;
+    let prev;
+    setGames(state => {
+      prev = state.find(g => g.id === id);
+      if (!prev || prev.name === clean) return state;
+      return state.map(g => g.id === id ? { ...g, name: clean } : g);
+    });
+    if (!prev || prev.name === clean) return;
+    const { error } = await supabase
+      .from("games")
+      .update({ name: clean })
+      .eq("id", id);
+    if (error) {
+      // eslint-disable-next-line no-console
+      console.error(`[library] rename ${id} failed:`, error.message);
+    }
+  };
+
   // Re-run the Firecrawl-backed Amazon search for an existing card to
   // swap in a fresh image. Search rules are unchanged (same
   // buildSearchQuery — title + category + notes summary).
@@ -463,7 +487,7 @@ function useGameLibrary() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded, games.length]);
 
-  return { games, loaded, addOrUpdate, remove, refreshImage };
+  return { games, loaded, addOrUpdate, remove, refreshImage, rename };
 }
 
 // ─── Status bar (cosmetic) ───────────────────────────────────────────────
@@ -877,7 +901,43 @@ function PhotoCredit({ source, attribution }) {
   );
 }
 
-function GameCard({ game, onEdit, onDelete, onRefresh }) {
+function GameCard({ game, onEdit, onDelete, onRefresh, onRename }) {
+  // Inline title editing state. Click the title to start editing;
+  // Enter or blur commits, Escape cancels. Falls back to a plain
+  // <h3> when onRename isn't provided (keeps the card usable in
+  // any context that doesn't wire up renaming).
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(game.name);
+  const titleInputRef = useRef(null);
+  useEffect(() => {
+    if (editing && titleInputRef.current) {
+      titleInputRef.current.focus();
+      titleInputRef.current.select();
+    }
+  }, [editing]);
+  useEffect(() => {
+    // Keep draft in sync with prop changes when not editing
+    // (e.g. when an external rename / replace updates the row).
+    if (!editing) setDraft(game.name);
+  }, [game.name, editing]);
+  const commit = () => {
+    const next = (draft ?? "").trim();
+    if (next && next !== game.name && onRename) {
+      onRename(game.id, next);
+    } else {
+      setDraft(game.name);
+    }
+    setEditing(false);
+  };
+  const cancel = () => {
+    setDraft(game.name);
+    setEditing(false);
+  };
+  const titleStyle = {
+    margin: 0, fontFamily: F.display, fontWeight: 700, fontSize: 20,
+    color: C.primary, lineHeight: "28px",
+    position: "absolute", top: 1, left: 0,
+  };
   return (
     <div style={{
       flexShrink: 0,
@@ -944,13 +1004,43 @@ function GameCard({ game, onEdit, onDelete, onRefresh }) {
         position: "relative",
       }}>
         {/* Title row (matches Figma node 36:2117). Edit/Trash icons live
-            on the meta row below, per Figma — the title sits alone. */}
+            on the meta row below, per Figma — the title sits alone.
+            Tap the title to inline-edit; commit on Enter or blur,
+            cancel on Escape. */}
         <div style={{ position: "relative", height: 31 }}>
-          <h3 style={{
-            margin: 0, fontFamily: F.display, fontWeight: 700, fontSize: 20,
-            color: C.primary, lineHeight: "28px",
-            position: "absolute", top: 1, left: 0,
-          }}>{game.name}</h3>
+          {editing && onRename ? (
+            <input
+              ref={titleInputRef}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onBlur={commit}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") { e.preventDefault(); commit(); }
+                if (e.key === "Escape") { e.preventDefault(); cancel(); }
+              }}
+              maxLength={100}
+              aria-label="Game title"
+              style={{
+                ...titleStyle,
+                right: 0, width: "100%",
+                background: "rgba(230,113,54,0.06)",
+                border: `1px solid ${C.primarySoft}`,
+                borderRadius: 6,
+                padding: "0 6px",
+                outline: "none",
+                boxSizing: "border-box",
+              }}
+            />
+          ) : (
+            <h3
+              onClick={() => onRename && setEditing(true)}
+              title={onRename ? "Tap to rename" : undefined}
+              style={{
+                ...titleStyle,
+                cursor: onRename ? "text" : "default",
+              }}
+            >{game.name}</h3>
+          )}
         </div>
         {/* Meta row — Players + Ages flow naturally. */}
         <div style={{
@@ -1006,7 +1096,7 @@ const metaText = {
   whiteSpace: "nowrap",
 };
 
-function LibraryScreen({ library, onAdd, onEdit, onDelete, onRefresh }) {
+function LibraryScreen({ library, onAdd, onEdit, onDelete, onRefresh, onRename }) {
   const [filter, setFilter] = useState("All");
   const filtered = filter === "All"
     ? library
@@ -1081,7 +1171,7 @@ function LibraryScreen({ library, onAdd, onEdit, onDelete, onRefresh }) {
         display: "flex", flexDirection: "column", alignItems: "center", gap: 16,
       }}>
         {filtered.map(g => (
-          <GameCard key={g.id} game={g} onEdit={onEdit} onDelete={onDelete} onRefresh={onRefresh} />
+          <GameCard key={g.id} game={g} onEdit={onEdit} onDelete={onDelete} onRefresh={onRefresh} onRename={onRename} />
         ))}
 
         {/* Add new card */}
@@ -1278,7 +1368,7 @@ const textInput = {
 export default function App() {
   const [tab, setTab] = useState("home"); // 'home' | 'library'
   const [editing, setEditing] = useState(null); // null | 'new' | game object
-  const { games, addOrUpdate, remove, refreshImage } = useGameLibrary();
+  const { games, addOrUpdate, remove, refreshImage, rename } = useGameLibrary();
 
   const onSave = (g, options) => {
     addOrUpdate(g, options);
@@ -1336,6 +1426,7 @@ export default function App() {
               onEdit={(g) => setEditing(g)}
               onDelete={remove}
               onRefresh={refreshImage}
+              onRename={rename}
             />
         }
       </div>
