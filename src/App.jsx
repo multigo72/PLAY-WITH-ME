@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Home as HomeIcon, Library as LibraryIcon,
   ArrowLeft, Pencil, Trash2, Plus, Users, RefreshCw,
+  Lock, LockOpen, ChevronDown,
 } from "lucide-react";
 import { supabase, callFn } from "./lib/supabase";
 
@@ -211,6 +212,7 @@ function rowToGame(r) {
     imageSource: r.image_source,
     imageAttribution: r.attribution,
     createdAt: r.created_at,
+    favorite: r.favorite || false,
     // imgLoading is purely client-side UI state, never persisted.
     imgLoading: false,
   };
@@ -228,6 +230,7 @@ function gameToRow(g) {
     img: g.imageUrl ?? null,
     image_source: g.imageSource ?? null,
     attribution: g.imageAttribution ?? null,
+    favorite: g.favorite || false,
   };
 }
 
@@ -523,7 +526,7 @@ const REEL_POOL = [
   { name: "Hide & Seek", emoji: "🌳" },
 ];
 
-const ITEM_HEIGHT = 90;
+const ITEM_HEIGHT = 107;
 
 function SlotReel({ items, spinning, targetIndex, delay, initialIndex = 0 }) {
   // Build a long strip by repeating the items 6x for smooth spin
@@ -556,11 +559,9 @@ function SlotReel({ items, spinning, targetIndex, delay, initialIndex = 0 }) {
 
   return (
     <div style={{
-      position: "relative", width: 99, height: ITEM_HEIGHT,
-      background: C.white, borderRadius: 16,
-      border: `3px solid ${C.primaryBorder}`,
+      position: "relative", width: 107, height: ITEM_HEIGHT,
+      background: C.white, borderRadius: 12,
       overflow: "hidden",
-      boxShadow: "inset 0 2px 6px rgba(0,0,0,0.05)",
     }}>
       <div style={{
         transform: `translateY(${offset}px)`,
@@ -627,90 +628,46 @@ function SlotReel({ items, spinning, targetIndex, delay, initialIndex = 0 }) {
   );
 }
 
-function SlotMachine({ library, onResult }) {
-  const [spinning, setSpinning] = useState(false);
-  const [targets, setTargets] = useState([0, 1, 2]);
-  const [pulse, setPulse] = useState(false);
-
-  // Build pool from user's library if there are enough; otherwise use REEL_POOL.
-  // imageUrl is included so each reel cell renders a scaled-down version
-  // of the game card photo (Amazon CDN URL), with the emoji as a fallback
-  // when the card hasn't been imaged yet or is using the local dice fallback.
-  const pool = useMemo(() => {
-    if (library.length >= 3) {
-      return library.map(g => ({
-        name: g.name,
-        emoji: g.emoji || CATEGORY_EMOJI[g.category] || "🎲",
-        imageUrl: (g.imageUrl && g.imageUrl !== FALLBACK_IMG) ? g.imageUrl : null,
-      }));
-    }
-    return REEL_POOL;
-  }, [library]);
-
-  const handleSpin = () => {
-    if (library.length === 0) {
-      onResult(null, "Add some games first!");
-      return;
-    }
-    setPulse(true);
-    setTimeout(() => setPulse(false), 500);
-
-    // Pick 3 random target indices in the pool (these drive what each reel lands on)
-    const t = [0, 1, 2].map(() => Math.floor(Math.random() * pool.length));
-    setSpinning(false);
-    requestAnimationFrame(() => {
-      setTargets(t);
-      setSpinning(true);
-    });
-
-    // The "winner" is a random pick from the user's library
-    const winner = library[Math.floor(Math.random() * library.length)];
-    setTimeout(() => {
-      onResult(winner);
-      setSpinning(false);
-    }, 1500 + 300 + 200);
-  };
-
+function RecentCarousel({ recent }) {
+  if (!recent.length) return null;
   return (
-    <>
-      {/* Slot container */}
-      <div style={{
-        width: 360, padding: "30px 18px", borderRadius: 24,
-        background: C.white,
-        boxShadow: `0 0 16.75px ${C.primary}, 0 4px 14px ${C.shadow}`,
-        position: "relative",
-      }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, position: "relative" }}>
-          <SlotReel items={pool} spinning={spinning} targetIndex={targets[0]} delay={0} initialIndex={0} />
-          <SlotReel items={pool} spinning={spinning} targetIndex={targets[1]} delay={150} initialIndex={1} />
-          <SlotReel items={pool} spinning={spinning} targetIndex={targets[2]} delay={300} initialIndex={2} />
-          {/* Selection line across reels */}
-          <div style={{
-            position: "absolute", left: -18, right: -18, top: "50%",
-            height: 3, marginTop: -1.5,
-            background: C.primary, opacity: 0.3, pointerEvents: "none",
-          }} />
-        </div>
+    <div style={{ padding: "24px 0 0 24px" }}>
+      <span style={{
+        fontFamily: F.display, fontWeight: 700, fontSize: 20,
+        color: C.primary, display: "block", marginBottom: 12,
+      }}>Recent</span>
+      <div
+        className="hide-scrollbar"
+        style={{ display: "flex", gap: 14, overflowX: "auto", paddingRight: 24, paddingBottom: 4 }}
+      >
+        {recent.map((g, i) => (
+          <div key={i} style={{
+            flexShrink: 0, width: 170, height: 107, borderRadius: 12,
+            position: "relative", overflow: "hidden",
+            backgroundColor: C.borderSoft,
+          }}>
+            {g.imageUrl && g.imageUrl !== FALLBACK_IMG && (
+              <div style={{
+                position: "absolute", inset: 0,
+                backgroundImage: `url("${g.imageUrl}")`,
+                backgroundSize: "cover", backgroundPosition: "center",
+              }} />
+            )}
+            <div style={{
+              position: "absolute", inset: 0,
+              background: "linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0) 62%)",
+            }} />
+            <span style={{
+              position: "absolute", bottom: 8, left: 0, right: 0,
+              textAlign: "center", fontFamily: "'Helvetica', sans-serif",
+              fontSize: 10, fontWeight: 400, color: "#fff",
+              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              padding: "0 8px",
+            }}>{g.name}</span>
+          </div>
+        ))}
       </div>
-
-      {/* Play button */}
-      <button onClick={handleSpin} style={{
-        marginTop: 28, width: 120, height: 120, borderRadius: "50%",
-        background: C.primary, border: "3px solid rgba(255,255,255,0.8)",
-        cursor: "pointer", padding: 0,
-        display: "flex", alignItems: "center", justifyContent: "center",
-        boxShadow: pulse
-          ? `0 14px 28px ${C.primaryShadow}, 0 0 0 6px rgba(230,113,54,0.18)`
-          : `0 8px 16px ${C.primaryShadow}`,
-        transform: pulse ? "scale(0.96)" : "scale(1)",
-        transition: "all 0.25s cubic-bezier(.4,1.5,.5,1)",
-      }}>
-        <span style={{
-          fontFamily: F.display, fontWeight: 800, fontSize: 24,
-          color: "#faf9f7", letterSpacing: "0.01em",
-        }}>Play</span>
-      </button>
-    </>
+    </div>
   );
 }
 
@@ -775,70 +732,156 @@ function TabBar({ tab, onChange }) {
 
 // ─── HOME ────────────────────────────────────────────────────────────────
 function HomeScreen({ library }) {
-  const [result, setResult] = useState(null);
+  const [spinning, setSpinning] = useState(false);
+  const [targets, setTargets] = useState([0, 1, 2]);
+  const [pulse, setPulse] = useState(false);
+  const [locked, setLocked] = useState([false, false, false]);
+  const [recent, setRecent] = useState([]);
   const [error, setError] = useState("");
 
-  const handleResult = (game, errMsg) => {
-    if (errMsg) { setError(errMsg); setResult(null); return; }
-    setError(""); setResult(game);
+  const pool = useMemo(() => {
+    if (library.length >= 3) {
+      return library.map(g => ({
+        name: g.name,
+        emoji: g.emoji || CATEGORY_EMOJI[g.category] || "🎲",
+        imageUrl: (g.imageUrl && g.imageUrl !== FALLBACK_IMG) ? g.imageUrl : null,
+      }));
+    }
+    return REEL_POOL;
+  }, [library]);
+
+  const handleSpin = () => {
+    if (library.length === 0) { setError("Add some games first!"); return; }
+    setError("");
+    setPulse(true);
+    setTimeout(() => setPulse(false), 400);
+
+    const t = [0, 1, 2].map(() => Math.floor(Math.random() * pool.length));
+    setSpinning(false);
+    requestAnimationFrame(() => { setTargets(t); setSpinning(true); });
+
+    const winner = library[Math.floor(Math.random() * library.length)];
+    setTimeout(() => {
+      setSpinning(false);
+      setRecent(prev => [winner, ...prev].slice(0, 5));
+    }, 1500 + 300 + 200);
   };
 
+  const toggleLock = (i) => setLocked(prev => {
+    const n = [...prev]; n[i] = !n[i]; return n;
+  });
+
   return (
-    <div style={{
-      flex: 1, display: "flex", flexDirection: "column",
-      background: C.background, overflow: "auto",
-    }}>
-      {/* Orange top header */}
-      <div style={{
-        flexShrink: 0, background: C.primary,
-        boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
-      }}>
-        <StatusBar tone="light" />
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", background: C.background, overflow: "auto" }}>
+
+      {/* Full-bleed hero header — photo with orange gradient overlay */}
+      <div style={{ position: "relative", width: "100%", height: 240, flexShrink: 0, overflow: "hidden" }}>
         <div style={{
-          height: 54, display: "flex",
-          alignItems: "center", justifyContent: "center",
+          position: "absolute", inset: 0,
+          backgroundImage: `url(https://images.unsplash.com/photo-1503454537195-1dcabb73ffb9?w=900&q=80)`,
+          backgroundSize: "cover", backgroundPosition: "center 30%",
+        }} />
+        {/* Gradient: transparent → #e67136 from 45% down */}
+        <div style={{
+          position: "absolute", inset: 0,
+          background: "linear-gradient(to bottom, rgba(230,113,54,0) 45%, #e67136 100%)",
+        }} />
+        {/* Status bar on top of image */}
+        <div style={{ position: "relative" }}>
+          <StatusBar tone="light" />
+        </div>
+        {/* "Play With Me" title centered near bottom */}
+        <div style={{
+          position: "absolute", bottom: 18, left: 0, right: 0, textAlign: "center",
         }}>
           <span style={{
             fontFamily: F.display, fontWeight: 800, fontSize: 24,
-            color: C.background, letterSpacing: "0.01em",
+            color: "#fff", letterSpacing: "0.01em",
           }}>Play With Me</span>
         </div>
       </div>
 
-      {/* Hero image */}
-      <div style={{
-        width: "100%", height: 308, flexShrink: 0,
-        background: `linear-gradient(135deg, #d4c9b0 0%, #b8a88a 100%)`,
-        backgroundImage: `url(https://images.unsplash.com/photo-1503454537195-1dcabb73ffb9?w=900&q=80)`,
-        backgroundSize: "cover", backgroundPosition: "center 30%",
-      }} />
+      {/* Pick a Game card */}
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "24px 0 0" }}>
+        <div style={{
+          width: 380, borderRadius: 24,
+          background: "#f7f5f0",
+          boxShadow: "0 0 33.5px rgba(230,113,54,0.4)",
+          position: "relative",
+        }}>
+          {/* Card header row */}
+          <div style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            padding: "0 16px", height: 60,
+          }}>
+            <span style={{
+              fontFamily: F.display, fontWeight: 700, fontSize: 20, color: C.primary,
+            }}>Pick a Game</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <span style={{
+                fontFamily: F.display, fontWeight: 700, fontSize: 12, color: C.primary,
+              }}>Filter Options</span>
+              <ChevronDown size={20} color={C.primary} strokeWidth={2.5} />
+            </div>
+          </div>
 
-      {/* Section title */}
-      <h2 style={{
-        margin: "26px 24px 0", textAlign: "center",
-        fontFamily: F.display, fontWeight: 800, fontSize: 20,
-        color: C.textDark, letterSpacing: "0.01em",
-      }}>Lets Find A Game</h2>
+          {/* Divider */}
+          <div style={{ height: 1, background: "rgba(0,0,0,0.08)", margin: "0 16px" }} />
 
-      {/* Slot machine + Play button */}
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginTop: 16 }}>
-        <SlotMachine library={library} onResult={handleResult} />
+          {/* Three reel windows + lock toggles */}
+          <div style={{
+            display: "flex", justifyContent: "space-between",
+            padding: "24px 16px 0",
+          }}>
+            {[0, 1, 2].map(i => (
+              <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
+                <SlotReel
+                  items={pool}
+                  spinning={spinning && !locked[i]}
+                  targetIndex={targets[i]}
+                  delay={i * 150}
+                  initialIndex={i}
+                />
+                {/* Lock / unlock toggle */}
+                <button
+                  type="button"
+                  onClick={() => toggleLock(i)}
+                  style={{
+                    background: "none", border: "none", cursor: "pointer",
+                    padding: 0, display: "flex", alignItems: "center", justifyContent: "center",
+                    width: 24, height: 24,
+                  }}
+                  aria-label={locked[i] ? "Unlock reel" : "Lock reel"}
+                >
+                  {locked[i]
+                    ? <Lock size={20} color="#858C94" strokeWidth={2} />
+                    : <LockOpen size={20} color="#858C94" strokeWidth={2} />
+                  }
+                </button>
+              </div>
+            ))}
+          </div>
+
+          {/* Spin button */}
+          <div style={{ display: "flex", justifyContent: "center", padding: "24px 32px 32px" }}>
+            <button onClick={handleSpin} style={{
+              width: "100%", height: 48, borderRadius: 45,
+              background: C.primary, border: "none", cursor: "pointer",
+              fontFamily: F.display, fontWeight: 800, fontSize: 16,
+              color: "#faf9f7", letterSpacing: "0.01em",
+              transform: pulse ? "scale(0.97)" : "scale(1)",
+              transition: "transform 0.2s cubic-bezier(.4,1.5,.5,1)",
+            }}>Spin</button>
+          </div>
+        </div>
+
+        {error && (
+          <div style={{ marginTop: 10, fontFamily: F.body, fontSize: 13, color: C.primary }}>{error}</div>
+        )}
       </div>
 
-      {/* Result toast — error messages only. The "YOUR PICK" success
-          card was removed per design; the reels themselves convey the
-          chosen game now. */}
-      {error && (
-        <div style={{
-          margin: "20px auto 24px", padding: "14px 22px",
-          borderRadius: 18, background: C.white,
-          boxShadow: `0 4px 18px ${C.shadow}`,
-          maxWidth: 320, animation: "fadeUp 0.4s ease-out",
-          textAlign: "center",
-        }}>
-          <span style={{ fontFamily: F.body, color: C.textDark, fontSize: 14 }}>{error}</span>
-        </div>
-      )}
+      {/* Recent carousel */}
+      <RecentCarousel recent={recent} />
 
       <div style={{ flex: 1 }} />
     </div>
@@ -979,6 +1022,9 @@ function GameCard({ game, onEdit, onDelete, onRefresh, onRename }) {
             onClick={(e) => {
               e.stopPropagation();
               if (game.imgLoading) return;
+              if (game.imageSource === "local") {
+                if (!window.confirm("This card uses a custom image. Replace it with one from Amazon?")) return;
+              }
               onRefresh(game);
             }}
             disabled={!!game.imgLoading}
@@ -1209,6 +1255,7 @@ function EditGameScreen({ game, onSave, onCancel }) {
   const [name, setName] = useState(game?.name || "");
   const [category, setCategory] = useState(game?.category || "Board Game");
   const [notes, setNotes] = useState(game?.notes || "");
+  const [favorite, setFavorite] = useState(game?.favorite || false);
   const [error, setError] = useState("");
 
   const handleSave = () => {
@@ -1229,6 +1276,7 @@ function EditGameScreen({ game, onSave, onCancel }) {
       category,
       emoji: CATEGORY_EMOJI[category],
       notes: trimmedNotes,
+      favorite,
       // Dash placeholders show through until Firecrawl fills them in
       // via resolveAndPatch. If Amazon's search snippet doesn't include
       // a player count / age range, the dashes stay so the UI signals
@@ -1298,20 +1346,50 @@ function EditGameScreen({ game, onSave, onCancel }) {
           }}>{error}</div>
         )}
 
+        {/* Favorite toggle */}
+        <button
+          type="button"
+          onClick={() => setFavorite(f => !f)}
+          style={{
+            display: "flex", alignItems: "center", gap: 16,
+            marginTop: 24, background: "none", border: "none",
+            cursor: "pointer", padding: 0,
+          }}
+        >
+          <span style={{
+            width: 40, height: 40, borderRadius: 14,
+            background: favorite ? C.primary : "rgba(255,255,255,0.22)",
+            border: favorite ? "none" : "1px solid #ffffff",
+            boxShadow: favorite ? "none" : "0 2px 8px rgba(0,0,0,0.05)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            transition: "all 0.15s",
+          }}>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill={favorite ? "#ffffff" : C.primary} xmlns="http://www.w3.org/2000/svg">
+              <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+            </svg>
+          </span>
+          <span style={{
+            fontFamily: F.body, fontWeight: 700, fontSize: 13,
+            color: C.textDark,
+          }}>Select as Favorite</span>
+        </button>
+
         {/* Category */}
-        <label style={{ ...fieldLabel, marginTop: 22 }}>Category</label>
+        <label style={{ ...fieldLabel, marginTop: 24 }}>Category</label>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 12 }}>
           {CATEGORIES.map(cat => {
             const active = category === cat;
             return (
               <button key={cat} onClick={() => setCategory(cat)} style={{
-                padding: "9px 16px", borderRadius: 999,
-                background: active ? C.primary : C.white,
-                border: active ? "none" : `1px solid ${C.borderSoft}`,
-                color: active ? C.white : C.textDark,
-                fontFamily: F.body, fontWeight: 700, fontSize: 14,
-                cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
-                boxShadow: active ? `0 4px 10px ${C.primaryShadow}` : "none",
+                padding: "10px 17px", borderRadius: 14, height: 40,
+                background: active ? C.primary : "rgba(255,255,255,0.22)",
+                border: active ? "none" : "1px solid #ffffff",
+                color: active ? C.white : C.primary,
+                fontFamily: F.reel, fontWeight: 700, fontSize: 13,
+                cursor: "pointer", display: "flex", alignItems: "center", gap: 4,
+                boxShadow: active
+                  ? `0 2px 4px rgba(0,0,0,0.05)`
+                  : "0 2px 8px rgba(0,0,0,0.05)",
                 transition: "all 0.15s",
               }}>
                 <span>{CATEGORY_EMOJI[cat]}</span>
@@ -1330,20 +1408,20 @@ function EditGameScreen({ game, onSave, onCancel }) {
           rows={4}
           style={{
             ...textInput, minHeight: 92, resize: "vertical",
-            paddingTop: 12, paddingBottom: 12,
+            paddingTop: 14, paddingBottom: 14,
+            border: "2px solid #fae1d5",
             fontFamily: F.body,
           }}
         />
 
         {/* Submit */}
         <button onClick={handleSave} disabled={!isValid} style={{
-          marginTop: 26, width: "100%", height: 58, borderRadius: 14,
-          background: isValid ? C.primary : C.primarySoft,
+          marginTop: 26, width: "100%", height: 58, borderRadius: 16,
+          background: isValid ? "#fac2a7" : C.primarySoft,
           border: "none", cursor: isValid ? "pointer" : "not-allowed",
           color: C.white,
-          fontFamily: F.display, fontWeight: 800, fontSize: 18,
-          letterSpacing: "0.01em",
-          boxShadow: isValid ? `0 6px 14px ${C.primaryShadow}` : "none",
+          fontFamily: F.body, fontWeight: 700, fontSize: 16,
+          textAlign: "center",
           transition: "all 0.15s",
         }}>{game ? "Save Changes" : "Add to Library"}</button>
       </div>
@@ -1352,15 +1430,15 @@ function EditGameScreen({ game, onSave, onCancel }) {
 }
 
 const fieldLabel = {
-  display: "block", marginBottom: 10,
-  fontFamily: F.body, fontWeight: 700, fontSize: 16,
+  display: "block", marginBottom: 6,
+  fontFamily: F.body, fontWeight: 700, fontSize: 13,
   color: C.textDark,
 };
 const textInput = {
   width: "100%", padding: "14px 16px",
-  borderRadius: 12, border: `1px solid ${C.borderSoft}`,
+  borderRadius: 14, border: `2px solid rgba(230,113,54,0.21)`,
   background: C.white,
-  fontFamily: F.body, fontSize: 15, color: C.textDark,
+  fontFamily: F.body, fontSize: 14, color: C.textDark,
   outline: "none", boxSizing: "border-box",
 };
 
