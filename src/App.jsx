@@ -912,7 +912,7 @@ function HomeScreen({ library, user, onSignUp, onLogIn, onLogOut }) {
             Figma crop offsets so the kite sits at the upper-right. */}
         <div style={{
           position: "absolute", left: 14, top: 0,
-          width: 77, height: 128, overflow: "hidden",
+          width: 92.4, height: 153.6, overflow: "hidden",
           transform: "scaleX(-1)", pointerEvents: "none",
         }}>
           <img src="/header-girl-kite.png" alt="" style={{
@@ -923,7 +923,7 @@ function HomeScreen({ library, user, onSignUp, onLogIn, onLogOut }) {
         {/* Right: "Boy w Soccer Ball" — exact Figma composition (142:5321).
             75.61×96 unit, bottom-aligned, boy upper-right + ball/shadow lower-left. */}
         <div style={{
-          position: "absolute", right: 24, top: 32,
+          position: "absolute", right: 24, top: 57,
           width: 75.61, height: 96.02, pointerEvents: "none",
         }}>
           {/* Boy (cropped to box, matching Figma object positioning) */}
