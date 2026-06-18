@@ -1085,7 +1085,7 @@ function HomeScreen({ library }) {
                   />
                 </svg>
                 <span style={{ fontFamily: F.display, fontWeight: 500, fontSize: 14, color: C.primary }}>
-                  Only Show Parent Favorites
+                  Only Show Favorites
                 </span>
               </div>
 
@@ -1348,7 +1348,7 @@ function GameCard({ game, onEdit, onDelete, onRefresh, onRename, onFavorite }) {
             <path d="M10.3828 2.45313C12.0046 0.516285 14.9788 -0.252934 17.3701 1.41992L17.3711 1.4209C18.6445 2.3056 19.4412 3.81898 19.4961 5.40332V5.4043C19.5601 7.21643 18.8118 8.88423 17.3506 10.7334C16.249 12.1275 14.771 13.59 12.9893 15.2646L11.1094 17.0146L11.0107 17.1055L11.0098 17.1064C10.4422 17.6323 9.57056 17.6321 9.00293 17.0986L9 17.0967L8.89063 16.9951L8.88965 16.9941L7.00977 15.25C5.22912 13.5816 3.75274 12.1223 2.65234 10.7305C1.19282 8.88431 0.443586 7.21613 0.50293 5.40332C0.557812 3.81897 1.35449 2.30561 2.62793 1.4209C5.02077 -0.243868 7.99545 0.517662 9.61621 2.45313L10 2.91113L10.3828 2.45313Z" stroke={game.favorite ? "#E67136" : "#5A5E5A"} strokeWidth="1"/>
           </svg>
           <span style={{ fontFamily: F.display, fontWeight: 500, fontSize: 14, color: "#5a5e5a" }}>
-            Select as Favorite
+            Favorite
           </span>
         </button>
 
