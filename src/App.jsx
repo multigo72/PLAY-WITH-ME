@@ -783,7 +783,7 @@ const authLink = {
   fontFamily: F.nav, fontWeight: 700, fontSize: 13, color: C.primary,
 };
 
-function HomeScreen({ library, user, onSignUp, onLogIn, onLogOut }) {
+function HomeScreen({ library, user, gate, onSpin, onSignUp, onLogIn, onLogOut }) {
   const [spinning, setSpinning] = useState(false);
   const [targets, setTargets] = useState([0, 1, 2]);
   const [pulse, setPulse] = useState(false);
@@ -837,6 +837,7 @@ function HomeScreen({ library, user, onSignUp, onLogIn, onLogOut }) {
   }, [recent]);
 
   const toggleCategory = (cat) => {
+    if (gate && gate()) return;
     setFilterCategories(prev => {
       if (cat === "All") return ["All"];
       const withoutAll = prev.filter(c => c !== "All");
@@ -861,6 +862,7 @@ function HomeScreen({ library, user, onSignUp, onLogIn, onLogOut }) {
 
     setTimeout(() => {
       setSpinning(false);
+      onSpin?.(); // counts the spin; nudges signup every 5th while signed out
     }, 1500 + 300 + 200);
   };
 
@@ -887,7 +889,7 @@ function HomeScreen({ library, user, onSignUp, onLogIn, onLogOut }) {
       }}>
         {/* Auth controls — upper right */}
         <div style={{
-          position: "absolute", top: 0, right: 14, zIndex: 6,
+          position: "absolute", top: -8, right: 14, zIndex: 6,
           display: "flex", alignItems: "center", gap: 12,
         }}>
           {user ? (
@@ -1137,7 +1139,7 @@ function HomeScreen({ library, user, onSignUp, onLogIn, onLogOut }) {
                 <svg
                   width="46" height="23" viewBox="0 0 46 23" fill="none"
                   xmlns="http://www.w3.org/2000/svg"
-                  onClick={() => setFavoritesOnly(prev => !prev)}
+                  onClick={() => { if (gate && gate()) return; setFavoritesOnly(prev => !prev); }}
                   style={{ cursor: "pointer", flexShrink: 0 }}
                 >
                   {/* Track — gray pill, shifts 10px when thumb slides right */}
@@ -1459,7 +1461,7 @@ const metaText = {
   whiteSpace: "nowrap",
 };
 
-function LibraryScreen({ library, onAdd, onEdit, onDelete, onRefresh, onRename, onFavorite }) {
+function LibraryScreen({ library, isGuest, onRequireAccount, onAdd, onEdit, onDelete, onRefresh, onRename, onFavorite }) {
   const [filter, setFilter] = useState("All");
   const filtered = filter === "All"
     ? library
@@ -1534,7 +1536,17 @@ function LibraryScreen({ library, onAdd, onEdit, onDelete, onRefresh, onRename, 
         display: "flex", flexDirection: "column", alignItems: "center", gap: 16,
       }}>
         {filtered.map(g => (
-          <GameCard key={g.id} game={g} onEdit={onEdit} onDelete={onDelete} onRefresh={onRefresh} onRename={onRename} onFavorite={onFavorite} />
+          <div key={g.id} style={{ position: "relative", flexShrink: 0 }}>
+            <GameCard game={g} onEdit={onEdit} onDelete={onDelete} onRefresh={onRefresh} onRename={onRename} onFavorite={onFavorite} />
+            {/* Signed-out guests: any tap on a card prompts account creation. */}
+            {isGuest && (
+              <div
+                onClick={onRequireAccount}
+                aria-label="Create an account to manage games"
+                style={{ position: "absolute", inset: 0, zIndex: 2, cursor: "pointer" }}
+              />
+            )}
+          </div>
         ))}
 
         {/* Add new card */}
@@ -1568,7 +1580,10 @@ function LibraryScreen({ library, onAdd, onEdit, onDelete, onRefresh, onRename, 
 }
 
 // ─── ADD/EDIT ────────────────────────────────────────────────────────────
-function EditGameScreen({ game, onSave, onCancel }) {
+function EditGameScreen({ game, gate, onSave, onCancel }) {
+  // For signed-out guests, any attempt to fill the form prompts account
+  // creation (and blocks the interaction).
+  const guard = () => gate ? gate() : false;
   const [name, setName] = useState(game?.name || "");
   const [category, setCategory] = useState(game?.category || "Board Games");
   const [notes, setNotes] = useState(game?.notes || "");
@@ -1652,6 +1667,7 @@ function EditGameScreen({ game, onSave, onCancel }) {
         <input
           value={name}
           onChange={e => { setName(e.target.value); if (error) setError(""); }}
+          onFocus={e => { if (guard()) e.target.blur(); }}
           placeholder="e.g., Monopoly, Hide & Seek..."
           style={{
             ...textInput,
@@ -1673,7 +1689,7 @@ function EditGameScreen({ game, onSave, onCancel }) {
           {CATEGORIES.map(cat => {
             const active = category === cat;
             return (
-              <button key={cat} onClick={() => setCategory(cat)} style={{
+              <button key={cat} onClick={() => { if (guard()) return; setCategory(cat); }} style={{
                 padding: "10px 17px", borderRadius: 14, height: 40,
                 background: active ? C.primary : "rgba(255,255,255,0.22)",
                 border: active ? "none" : "1px solid #ffffff",
@@ -1696,6 +1712,7 @@ function EditGameScreen({ game, onSave, onCancel }) {
         <textarea
           value={notes}
           onChange={e => setNotes(e.target.value)}
+          onFocus={e => { if (guard()) e.target.blur(); }}
           placeholder="Any tips or notes..."
           rows={4}
           style={{
@@ -1858,14 +1875,33 @@ export default function App() {
   const [authMode, setAuthMode] = useState(null); // null | 'signup' | 'login'
   const { games, addOrUpdate, remove, refreshImage, rename, setFavorite } = useGameLibrary();
 
-  // Track the Supabase auth session.
+  // Track the Supabase auth session. The moment a user is signed in (via
+  // signup, login, or a restored session), drop all gating: every gate is
+  // keyed off `user`, and we also close any open auth modal here so the
+  // first-time restrictions lift immediately and completely.
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setUser(data.session?.user ?? null));
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
+      const u = session?.user ?? null;
+      setUser(u);
+      if (u) setAuthMode(null);
     });
     return () => sub.subscription.unsubscribe();
   }, []);
+
+  // First-time gating: signed-out users get the Create Account modal when they
+  // try to manage the library. Spinning, locking, and picking reels stay free.
+  const spinCountRef = useRef(0);
+  const requireAccount = () => {
+    if (!user) { setAuthMode("signup"); return true; }
+    return false;
+  };
+  // Nudge with the signup modal after every 5 spins while signed out.
+  const registerSpin = () => {
+    if (user) return;
+    spinCountRef.current += 1;
+    if (spinCountRef.current % 5 === 0) setAuthMode("signup");
+  };
 
   const onSave = (g, options) => {
     addOrUpdate(g, options);
@@ -1904,9 +1940,18 @@ export default function App() {
         <style>{styles}</style>
         <EditGameScreen
           game={editing === "new" ? null : editing}
+          gate={requireAccount}
           onSave={onSave}
           onCancel={() => setEditing(null)}
         />
+        {authMode && (
+          <AuthModal
+            mode={authMode}
+            onClose={() => setAuthMode(null)}
+            onSwitch={setAuthMode}
+            onAuthed={() => setAuthMode(null)}
+          />
+        )}
       </div>
     );
   }
@@ -1919,12 +1964,16 @@ export default function App() {
           ? <HomeScreen
               library={games}
               user={user}
+              gate={requireAccount}
+              onSpin={registerSpin}
               onSignUp={() => setAuthMode("signup")}
               onLogIn={() => setAuthMode("login")}
               onLogOut={() => supabase.auth.signOut()}
             />
           : <LibraryScreen
               library={games}
+              isGuest={!user}
+              onRequireAccount={() => setAuthMode("signup")}
               onAdd={() => setEditing("new")}
               onEdit={(g) => setEditing(g)}
               onDelete={remove}
