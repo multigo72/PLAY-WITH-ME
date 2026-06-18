@@ -55,18 +55,29 @@ const F = {
 
 // ─── Categories + emoji map ──────────────────────────────────────────────
 const CATEGORIES = [
-  "Board Game", "Card Game", "Puzzle", "Toy",
-  "Active", "Video Game", "Other",
+  "Board Games", "Card Games", "Puzzles", "Toy",
+  "Active", "Video Games", "Creativity", "Buy Suggestions", "Other",
 ];
 
 const CATEGORY_EMOJI = {
-  "Board Game": "♟️",
-  "Card Game": "🃏",
-  "Puzzle": "🧩",
+  "Board Games": "♟️",
+  "Card Games": "🃏",
+  "Puzzles": "🧩",
   "Toy": "🧸",
   "Active": "🌳",
-  "Video Game": "🎮",
+  "Video Games": "🎮",
+  "Creativity": "🎨",
+  "Buy Suggestions": "🛒",
   "Other": "🎯",
+};
+
+// Legacy DB category values → current labels, normalized on load so existing
+// rows keep matching their (now-pluralized) category button.
+const LEGACY_CATEGORY = {
+  "Puzzle": "Puzzles",
+  "Board Game": "Board Games",
+  "Card Game": "Card Games",
+  "Video Game": "Video Games",
 };
 
 // ─── Image resolution: Firecrawl (Amazon) via Supabase Edge Function ────
@@ -203,7 +214,9 @@ function rowToGame(r) {
   return {
     id: r.id,
     name: r.name,
-    category: r.category,
+    // Normalize legacy category values (e.g. "Puzzle" → "Puzzles",
+    // "Board Game" → "Board Games") so old rows match the current buttons.
+    category: LEGACY_CATEGORY[r.category] || r.category,
     emoji: r.emoji,
     notes: r.notes || "",
     players: r.players,
@@ -765,7 +778,12 @@ function FilledLockOpen({ color = "#858C94", size = 20 }) {
 }
 
 // ─── HOME ────────────────────────────────────────────────────────────────
-function HomeScreen({ library }) {
+const authLink = {
+  background: "none", border: "none", padding: "4px 2px", cursor: "pointer",
+  fontFamily: F.nav, fontWeight: 700, fontSize: 13, color: C.primary,
+};
+
+function HomeScreen({ library, user, onSignUp, onLogIn, onLogOut }) {
   const [spinning, setSpinning] = useState(false);
   const [targets, setTargets] = useState([0, 1, 2]);
   const [pulse, setPulse] = useState(false);
@@ -785,11 +803,6 @@ function HomeScreen({ library }) {
   const [filterOpen, setFilterOpen] = useState(false);
   const [filterCategories, setFilterCategories] = useState(["All"]);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
-
-  const availableCategories = useMemo(() => {
-    const inLibrary = new Set(library.map(g => g.category).filter(Boolean));
-    return CATEGORIES.filter(c => inLibrary.has(c));
-  }, [library]);
 
   const filteredGames = useMemo(() => {
     let src = library;
@@ -864,32 +877,85 @@ function HomeScreen({ library }) {
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", background: C.background, overflow: "auto" }}>
 
-      {/* Full-bleed hero header — photo with orange gradient at top */}
-      <div style={{ position: "relative", width: "100%", height: 240, flexShrink: 0, overflow: "hidden" }}>
-        {/* Photo */}
+      {/* "Play With Me" banner (Figma 136:5288) — offset 24px from the top.
+          Replaces the old hero photo + status bar + overlaid title. */}
+      <div style={{
+        position: "relative", flexShrink: 0,
+        marginTop: 24, height: 128,
+        display: "flex", flexDirection: "column",
+        alignItems: "center", justifyContent: "center",
+      }}>
+        {/* Auth controls — upper right */}
         <div style={{
-          position: "absolute", inset: 0,
-          backgroundImage: `url(https://images.unsplash.com/photo-1503454537195-1dcabb73ffb9?w=900&q=80)`,
-          backgroundSize: "cover", backgroundPosition: "center 30%",
-        }} />
-        {/* Gradient: #e67136 at top → transparent at ~55% (matches Figma rotate-180 gradient) */}
-        <div style={{
-          position: "absolute", inset: 0,
-          background: "linear-gradient(to bottom, #e67136 0%, rgba(230,113,54,0) 55%)",
-        }} />
-        {/* Status bar overlaid on gradient */}
-        <div style={{ position: "relative" }}>
-          <StatusBar tone="light" />
-        </div>
-        {/* "Play With Me" title — centered below status bar, in the orange zone */}
-        <div style={{
-          position: "absolute", top: 40, left: 0, right: 0, textAlign: "center",
+          position: "absolute", top: 0, right: 14, zIndex: 6,
+          display: "flex", alignItems: "center", gap: 12,
         }}>
-          <span style={{
-            fontFamily: F.display, fontWeight: 800, fontSize: 24,
-            color: "#fff", letterSpacing: "0.01em",
-          }}>Play With Me</span>
+          {user ? (
+            <>
+              <span style={{
+                fontFamily: F.nav, fontWeight: 600, fontSize: 12, color: C.textDark,
+                maxWidth: 96, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              }}>
+                {user.user_metadata?.full_name?.split(" ")[0] || user.email}
+              </span>
+              <button style={authLink} onClick={onLogOut}>Log Out</button>
+            </>
+          ) : (
+            <>
+              <button style={authLink} onClick={onLogIn}>Log In</button>
+              <button style={authLink} onClick={onSignUp}>Sign Up</button>
+            </>
+          )}
         </div>
+        {/* Left: "Girl w Kite" — exact Figma composition (142:5314).
+            Mirrored (scaleX(-1) ≡ Figma's -scale-y-100 rotate-180) with the
+            Figma crop offsets so the kite sits at the upper-right. */}
+        <div style={{
+          position: "absolute", left: 14, top: 0,
+          width: 77, height: 128, overflow: "hidden",
+          transform: "scaleX(-1)", pointerEvents: "none",
+        }}>
+          <img src="/header-girl-kite.png" alt="" style={{
+            position: "absolute", left: "-5.47%", top: "-2.17%",
+            width: "116.39%", height: "122.83%", maxWidth: "none",
+          }} />
+        </div>
+        {/* Right: "Boy w Soccer Ball" — exact Figma composition (142:5321).
+            75.61×96 unit, bottom-aligned, boy upper-right + ball/shadow lower-left. */}
+        <div style={{
+          position: "absolute", right: 24, top: 32,
+          width: 75.61, height: 96.02, pointerEvents: "none",
+        }}>
+          {/* Boy (cropped to box, matching Figma object positioning) */}
+          <div style={{
+            position: "absolute", left: 14.44, top: 0,
+            width: 61.17, height: 88.36, overflow: "hidden",
+          }}>
+            <img src="/header-boy.png" alt="" style={{
+              position: "absolute", left: "-1.14%", top: 0,
+              width: "102.29%", height: "125%", maxWidth: "none",
+            }} />
+          </div>
+          {/* Ball shadow */}
+          <img src="/header-ball-shadow.svg" alt="" style={{
+            position: "absolute", left: 4.25, top: 85.81,
+            width: 20.39, height: 10.21, transform: "rotate(-7.74deg)",
+          }} />
+          {/* Soccer ball */}
+          <img src="/header-ball.png" alt="" style={{
+            position: "absolute", left: 0, top: 73.91,
+            width: 22.09, height: 22.09, objectFit: "cover",
+          }} />
+        </div>
+        {/* Title + tagline, centered */}
+        <span style={{
+          fontFamily: F.display, fontWeight: 800, fontSize: 32,
+          color: "#392d13", lineHeight: 1.1, textAlign: "center",
+        }}>Play With Me</span>
+        <span style={{
+          fontFamily: F.display, fontWeight: 600, fontSize: 12,
+          color: C.primary, textAlign: "center", marginTop: 6, lineHeight: 1.35,
+        }}>The Right Activity<br />At The Right Time</span>
       </div>
 
       {selectedGame ? (
@@ -943,6 +1009,8 @@ function HomeScreen({ library }) {
           position: "relative",
           overflow: "hidden",
         }}>
+          {!filterOpen && (
+          <>
           {/* Card header row */}
           <div style={{
             display: "flex", alignItems: "center", justifyContent: "space-between",
@@ -1016,14 +1084,14 @@ function HomeScreen({ library }) {
               transition: "transform 0.2s cubic-bezier(.4,1.5,.5,1)",
             }}>Spin</button>
           </div>
+          </>
+          )}
 
-          {/* Filter overlay panel */}
+          {/* Filter panel — rendered in normal flow so the card grows to fit
+              its content instead of scrolling internally. */}
           {filterOpen && (
             <div style={{
-              position: "absolute", inset: 0,
-              background: "#f7f5f0", borderRadius: 24, zIndex: 10,
               display: "flex", flexDirection: "column",
-              overflowY: "auto",
             }}>
               {/* Header */}
               <div style={{
@@ -1091,7 +1159,7 @@ function HomeScreen({ library }) {
 
               {/* Category buttons */}
               <div style={{ display: "flex", flexWrap: "wrap", gap: "12px 12px", padding: "0 16px 24px" }}>
-                {["All", ...availableCategories].map(cat => {
+                {["All", ...CATEGORIES].map(cat => {
                   const isActive = filterCategories.includes(cat);
                   return (
                     <button
@@ -1502,7 +1570,7 @@ function LibraryScreen({ library, onAdd, onEdit, onDelete, onRefresh, onRename, 
 // ─── ADD/EDIT ────────────────────────────────────────────────────────────
 function EditGameScreen({ game, onSave, onCancel }) {
   const [name, setName] = useState(game?.name || "");
-  const [category, setCategory] = useState(game?.category || "Board Game");
+  const [category, setCategory] = useState(game?.category || "Board Games");
   const [notes, setNotes] = useState(game?.notes || "");
   const [error, setError] = useState("");
 
@@ -1544,7 +1612,7 @@ function EditGameScreen({ game, onSave, onCancel }) {
   const isDirty = !game
     ? isValid
     : (name.trim() !== (game.name || "").trim()
-      || category !== (game.category || "Board Game")
+      || category !== (game.category || "Board Games")
       || notes.trim() !== (game.notes || "").trim());
 
   return (
@@ -1667,11 +1735,137 @@ const textInput = {
   outline: "none", boxSizing: "border-box",
 };
 
+// ─── Auth modal (Supabase email/password) ────────────────────────────────
+const authOverlay = {
+  position: "absolute", inset: 0, zIndex: 100,
+  background: "rgba(0,0,0,0.6)",
+  display: "flex", alignItems: "center", justifyContent: "center",
+  padding: 20,
+};
+const authModalBox = {
+  position: "relative", width: "100%", maxWidth: 360,
+  background: "#2c2c2e", borderRadius: 16, padding: "28px 24px 22px",
+  boxShadow: "0 24px 64px rgba(0,0,0,0.55)",
+};
+const authCloseX = {
+  position: "absolute", top: 14, right: 14,
+  background: "none", border: "none", color: "#8a8a8e",
+  fontSize: 18, lineHeight: 1, cursor: "pointer", padding: 4,
+};
+const authTitle = { margin: "0 0 6px", fontFamily: F.body, fontWeight: 800, fontSize: 24, color: "#fff" };
+const authSubtitle = { margin: "0 0 22px", fontFamily: F.body, fontSize: 14, color: "#9a9a9e" };
+const authInput = {
+  width: "100%", padding: "14px 16px", borderRadius: 12,
+  border: "1px solid rgba(255,255,255,0.14)", background: "rgba(255,255,255,0.03)",
+  color: "#fff", fontFamily: F.body, fontSize: 14, outline: "none", boxSizing: "border-box",
+};
+const authPrimaryBtn = {
+  width: "100%", padding: "14px", marginTop: 2, borderRadius: 12, border: "none",
+  background: "#ededed", color: "#1a1a1a", fontFamily: F.body, fontWeight: 700,
+  fontSize: 15, cursor: "pointer",
+};
+const authFooter = { margin: "18px 0 0", textAlign: "center", fontFamily: F.body, fontSize: 13, color: "#9a9a9e" };
+const authFooterLink = {
+  background: "none", border: "none", padding: 0, cursor: "pointer",
+  color: "#fff", fontWeight: 700, fontSize: 13, textDecoration: "underline", fontFamily: F.body,
+};
+
+function AuthModal({ mode, onClose, onSwitch, onAuthed }) {
+  const isSignup = mode === "signup";
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError(""); setInfo("");
+    if (!email.trim() || !password || (isSignup && !fullName.trim())) {
+      setError("Please fill in all fields.");
+      return;
+    }
+    setLoading(true);
+    try {
+      if (isSignup) {
+        const { data, error } = await supabase.auth.signUp({
+          email: email.trim(),
+          password,
+          options: { data: { full_name: fullName.trim() } },
+        });
+        if (error) setError(error.message);
+        else if (!data.session) setInfo("Account created! Check your email to confirm, then log in.");
+        else onAuthed();
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+        if (error) setError(error.message);
+        else onAuthed();
+      }
+    } catch (err) {
+      setError(err?.message || "Something went wrong. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={authOverlay} onClick={onClose}>
+      <div style={authModalBox} onClick={(e) => e.stopPropagation()}>
+        <button style={authCloseX} onClick={onClose} aria-label="Close">✕</button>
+        <h2 style={authTitle}>{isSignup ? "Create Account" : "Welcome Back"}</h2>
+        <p style={authSubtitle}>
+          {isSignup ? "Sign up to save your game library" : "Log in to your account"}
+        </p>
+        <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {isSignup && (
+            <input
+              style={authInput} placeholder="Full name" autoComplete="name"
+              value={fullName} onChange={(e) => setFullName(e.target.value)}
+            />
+          )}
+          <input
+            style={authInput} type="email" placeholder="Email address" autoComplete="email"
+            value={email} onChange={(e) => setEmail(e.target.value)}
+          />
+          <input
+            style={authInput} type="password" placeholder="Password"
+            autoComplete={isSignup ? "new-password" : "current-password"}
+            value={password} onChange={(e) => setPassword(e.target.value)}
+          />
+          {error && <p style={{ margin: 0, color: "#ff6b6b", fontFamily: F.body, fontSize: 13 }}>{error}</p>}
+          {info && <p style={{ margin: 0, color: "#7bd88f", fontFamily: F.body, fontSize: 13 }}>{info}</p>}
+          <button type="submit" style={{ ...authPrimaryBtn, opacity: loading ? 0.7 : 1 }} disabled={loading}>
+            {loading ? "Please wait…" : isSignup ? "Create Account" : "Log In"}
+          </button>
+        </form>
+        <p style={authFooter}>
+          {isSignup ? "Already have an account? " : "Don't have an account? "}
+          <button style={authFooterLink} onClick={() => onSwitch(isSignup ? "login" : "signup")}>
+            {isSignup ? "Log In" : "Sign Up"}
+          </button>
+        </p>
+      </div>
+    </div>
+  );
+}
+
 // ─── ROOT ────────────────────────────────────────────────────────────────
 export default function App() {
   const [tab, setTab] = useState("home"); // 'home' | 'library'
   const [editing, setEditing] = useState(null); // null | 'new' | game object
+  const [user, setUser] = useState(null);
+  const [authMode, setAuthMode] = useState(null); // null | 'signup' | 'login'
   const { games, addOrUpdate, remove, refreshImage, rename, setFavorite } = useGameLibrary();
+
+  // Track the Supabase auth session.
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setUser(data.session?.user ?? null));
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+    return () => sub.subscription.unsubscribe();
+  }, []);
 
   const onSave = (g, options) => {
     addOrUpdate(g, options);
@@ -1722,7 +1916,13 @@ export default function App() {
       <style>{styles}</style>
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
         {tab === "home"
-          ? <HomeScreen library={games} />
+          ? <HomeScreen
+              library={games}
+              user={user}
+              onSignUp={() => setAuthMode("signup")}
+              onLogIn={() => setAuthMode("login")}
+              onLogOut={() => supabase.auth.signOut()}
+            />
           : <LibraryScreen
               library={games}
               onAdd={() => setEditing("new")}
@@ -1735,6 +1935,14 @@ export default function App() {
         }
       </div>
       <TabBar tab={tab} onChange={setTab} />
+      {authMode && (
+        <AuthModal
+          mode={authMode}
+          onClose={() => setAuthMode(null)}
+          onSwitch={setAuthMode}
+          onAuthed={() => setAuthMode(null)}
+        />
+      )}
     </div>
   );
 }

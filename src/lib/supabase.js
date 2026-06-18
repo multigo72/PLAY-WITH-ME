@@ -22,7 +22,8 @@ if (!import.meta.env.VITE_SUPABASE_URL || !import.meta.env.VITE_SUPABASE_ANON_KE
 }
 
 export const supabase = createClient(URL, ANON_KEY, {
-  auth: { persistSession: false },
+  // Persist the auth session so a logged-in user stays signed in across reloads.
+  auth: { persistSession: true, autoRefreshToken: true },
 });
 
 // URL of the deployed Hono edge function. Routes hang off this prefix.
