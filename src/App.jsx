@@ -1787,11 +1787,29 @@ const authFooterLink = {
   color: "#fff", fontWeight: 700, fontSize: 13, textDecoration: "underline", fontFamily: F.body,
 };
 
+// "Remember Me": persist the login email + password on this device so the user
+// can be auto-logged-in after signing out. SECURITY NOTE: this stores the
+// password in plaintext in the browser's localStorage — only acceptable for a
+// prototype. A real app should never store a raw password client-side.
+const REMEMBER_KEY = "pwm:remember";
+function loadRemembered() {
+  try { const r = localStorage.getItem(REMEMBER_KEY); return r ? JSON.parse(r) : null; }
+  catch { return null; }
+}
+function saveRemembered(email, password) {
+  try { localStorage.setItem(REMEMBER_KEY, JSON.stringify({ email, password })); } catch { /* ignore */ }
+}
+function clearRemembered() {
+  try { localStorage.removeItem(REMEMBER_KEY); } catch { /* ignore */ }
+}
+
 function AuthModal({ mode, onClose, onSwitch, onAuthed }) {
   const isSignup = mode === "signup";
+  const remembered = isSignup ? null : loadRemembered();
   const [fullName, setFullName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [email, setEmail] = useState(remembered?.email || "");
+  const [password, setPassword] = useState(remembered?.password || "");
+  const [remember, setRemember] = useState(!!remembered);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
   const [loading, setLoading] = useState(false);
@@ -1817,7 +1835,11 @@ function AuthModal({ mode, onClose, onSwitch, onAuthed }) {
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
         if (error) setError(error.message);
-        else onAuthed();
+        else {
+          if (remember) saveRemembered(email.trim(), password);
+          else clearRemembered();
+          onAuthed();
+        }
       }
     } catch (err) {
       setError(err?.message || "Something went wrong. Please try again.");
@@ -1850,6 +1872,19 @@ function AuthModal({ mode, onClose, onSwitch, onAuthed }) {
             autoComplete={isSignup ? "new-password" : "current-password"}
             value={password} onChange={(e) => setPassword(e.target.value)}
           />
+          {!isSignup && (
+            <label style={{
+              display: "flex", alignItems: "center", gap: 8,
+              cursor: "pointer", userSelect: "none", marginTop: -2,
+            }}>
+              <input
+                type="checkbox" checked={remember}
+                onChange={(e) => setRemember(e.target.checked)}
+                style={{ width: 16, height: 16, accentColor: C.primary, cursor: "pointer" }}
+              />
+              <span style={{ fontFamily: F.body, fontSize: 13, color: "#cfcfd3" }}>Remember Me</span>
+            </label>
+          )}
           {error && <p style={{ margin: 0, color: "#ff6b6b", fontFamily: F.body, fontSize: 13 }}>{error}</p>}
           {info && <p style={{ margin: 0, color: "#7bd88f", fontFamily: F.body, fontSize: 13 }}>{info}</p>}
           <button type="submit" style={{ ...authPrimaryBtn, opacity: loading ? 0.7 : 1 }} disabled={loading}>
@@ -1902,6 +1937,17 @@ export default function App() {
     spinCountRef.current += 1;
     if (spinCountRef.current % 5 === 0) setAuthMode("signup");
   };
+  // Header "Log In": if credentials were remembered on this device, log in
+  // automatically; otherwise open the Welcome Back modal (pre-filled if saved).
+  const handleLogIn = async () => {
+    const saved = loadRemembered();
+    if (saved?.email && saved?.password) {
+      const { error } = await supabase.auth.signInWithPassword({ email: saved.email, password: saved.password });
+      if (error) setAuthMode("login"); // saved creds no longer valid — show the modal
+    } else {
+      setAuthMode("login");
+    }
+  };
 
   const onSave = (g, options) => {
     addOrUpdate(g, options);
@@ -1946,6 +1992,7 @@ export default function App() {
         />
         {authMode && (
           <AuthModal
+            key={authMode}
             mode={authMode}
             onClose={() => setAuthMode(null)}
             onSwitch={setAuthMode}
@@ -1967,7 +2014,7 @@ export default function App() {
               gate={requireAccount}
               onSpin={registerSpin}
               onSignUp={() => setAuthMode("signup")}
-              onLogIn={() => setAuthMode("login")}
+              onLogIn={handleLogIn}
               onLogOut={() => supabase.auth.signOut()}
             />
           : <LibraryScreen
