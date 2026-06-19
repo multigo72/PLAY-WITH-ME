@@ -211,7 +211,9 @@ async function resolveGameCardImage(card, { excludeUrls } = {}) {
 // ─── Supabase-backed library hook ────────────────────────────────────────
 // Library lives in the public.games table. We map the snake_case DB row
 // to the camelCase shape used throughout the React tree.
-function rowToGame(r) {
+// `isCatalog` rows come from the read-only default_catalog (guest view) — they
+// have no user_id / from_default columns, so flag them from-default.
+function rowToGame(r, isCatalog = false) {
   return {
     id: r.id,
     name: r.name,
@@ -227,6 +229,9 @@ function rowToGame(r) {
     imageAttribution: r.attribution,
     createdAt: r.created_at,
     favorite: r.favorite || false,
+    userId: r.user_id ?? null,
+    // Cards copied from the default catalog have a locked image.
+    fromDefault: isCatalog ? true : !!r.from_default,
     // imgLoading is purely client-side UI state, never persisted.
     imgLoading: false,
   };
@@ -235,6 +240,8 @@ function rowToGame(r) {
 function gameToRow(g) {
   return {
     id: g.id,
+    user_id: g.userId ?? null,
+    from_default: g.fromDefault ?? false,
     name: g.name,
     category: g.category,
     emoji: g.emoji ?? null,
@@ -248,7 +255,8 @@ function gameToRow(g) {
   };
 }
 
-function useGameLibrary() {
+function useGameLibrary(user) {
+  const userId = user?.id ?? null;
   const [games, setGames] = useState([]);
   const [loaded, setLoaded] = useState(false);
   // Track ids we've already kicked off a backfill for so we don't loop.
@@ -266,28 +274,33 @@ function useGameLibrary() {
   // ~3–4s round-trip to ~50ms local lookup.
   const cachedResultsRef = useRef(new Map());
 
-  // Initial load.
+  // Load the right source for who's looking, and reload when that changes:
+  //   signed in  → this account's own per-account library (RLS-isolated)
+  //   signed out → the global read-only default catalog (the starting set)
   useEffect(() => {
     let cancelled = false;
+    setLoaded(false);
+    backfilledRef.current = new Set();
     (async () => {
-      // Newest cards first — Add-to-Library should land at the top of
-      // the list, and the seeded rows fall in below the user's additions.
-      const { data, error } = await supabase
-        .from("games")
-        .select("*")
-        .order("created_at", { ascending: false });
+      // Newest cards first — Add-to-Library lands at the top of the list.
+      const { data, error } = userId
+        ? await supabase.from("games").select("*").eq("user_id", userId)
+            .order("created_at", { ascending: false })
+        : await supabase.from("default_catalog").select("*")
+            .order("created_at", { ascending: false });
       if (cancelled) return;
       if (error) {
         // eslint-disable-next-line no-console
-        console.error("[library] initial load failed:", error.message);
+        console.error("[library] load failed:", error.message);
+        setGames([]);
         setLoaded(true);
         return;
       }
-      setGames((data || []).map(rowToGame));
+      setGames((data || []).map(r => rowToGame(r, !userId)));
       setLoaded(true);
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [userId]);
 
   // Helper: patch a row in DB + local state.
   const patchById = async (id, patch) => {
@@ -349,9 +362,12 @@ function useGameLibrary() {
   // attribution when it resolves. The shimmer stays visible for the
   // whole chain. Save is never blocked by the network call.
   const addOrUpdate = async (game, { fetchImage = false } = {}) => {
+    // Every owned card is stamped with the current account; new cards are
+    // not from the default catalog (so their image is fully editable).
+    const owned = { ...game, userId: game.userId ?? userId, fromDefault: game.fromDefault ?? false };
     const next = fetchImage
-      ? { ...game, imgLoading: true, imageUrl: null, imageSource: null, imageAttribution: null }
-      : game;
+      ? { ...owned, imgLoading: true, imageUrl: null, imageSource: null, imageAttribution: null }
+      : owned;
 
     // Prepend new cards so they land at the top of the list. Existing
     // cards keep their position when re-saved.
@@ -482,8 +498,11 @@ function useGameLibrary() {
   // re-resolved through the Firecrawl chain. Runs once per id per
   // session (tracked in backfilledRef) so re-renders don't restart it.
   useEffect(() => {
-    if (!loaded) return;
+    // Guests view the read-only catalog (can't write), and default-origin
+    // cards have a locked image — neither gets backfilled.
+    if (!loaded || !userId) return;
     for (const g of games) {
+      if (g.fromDefault) continue;
       // Skip cards that already have an image we don't want to clobber:
       //   "amazon" — backfilled successfully from Firecrawl
       //   "local"  — manually set image (e.g. uploaded JPEG in public/)
@@ -503,7 +522,7 @@ function useGameLibrary() {
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded, games.length]);
+  }, [loaded, games.length, userId]);
 
   const setFavorite = (id, value) => patchById(id, { favorite: value });
 
@@ -804,6 +823,38 @@ function HomeScreen({ library, user, gate, onSpin, onSignUp, onLogIn, onLogOut }
   const [filterOpen, setFilterOpen] = useState(false);
   const [filterCategories, setFilterCategories] = useState(["All"]);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
+
+  // Per-account filter preferences: load on login, persist on change. Guests
+  // keep ephemeral, in-memory filters (and are gated from changing them anyway).
+  const prefsReadyRef = useRef(false);
+  useEffect(() => {
+    prefsReadyRef.current = false;
+    if (!user) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from("user_preferences").select("filters").eq("user_id", user.id).maybeSingle();
+      if (cancelled) return;
+      const f = data?.filters;
+      if (f) {
+        if (Array.isArray(f.categories)) setFilterCategories(f.categories.length ? f.categories : ["All"]);
+        if (typeof f.favoritesOnly === "boolean") setFavoritesOnly(f.favoritesOnly);
+      }
+      prefsReadyRef.current = true; // only persist changes made after the load
+    })();
+    return () => { cancelled = true; };
+  }, [user?.id]);
+  useEffect(() => {
+    if (!user || !prefsReadyRef.current) return;
+    const t = setTimeout(() => {
+      supabase.from("user_preferences").upsert({
+        user_id: user.id,
+        filters: { categories: filterCategories, favoritesOnly },
+        updated_at: new Date().toISOString(),
+      });
+    }, 300);
+    return () => clearTimeout(t);
+  }, [filterCategories, favoritesOnly, user]);
 
   const filteredGames = useMemo(() => {
     let src = library;
@@ -1333,7 +1384,7 @@ function GameCard({ game, onEdit, onDelete, onRefresh, onRename, onFavorite }) {
             using the same query construction (title + category + notes
             summary) and patches the card with the new image. Disabled
             while a fetch is already in flight to prevent double-clicks. */}
-        {onRefresh && (
+        {onRefresh && !game.fromDefault && (
           <button
             type="button"
             onClick={(e) => {
@@ -1595,15 +1646,21 @@ function EditGameScreen({ game, gate, onSave, onCancel }) {
     const trimmedName = name.trim();
     const trimmedNotes = notes.trim();
     const isEditing = !!game;
+    const fromDefault = game?.fromDefault || false;
     // Re-fetch the image when this is a new card OR any of the three
-    // query-driving fields (title, category, notes) have changed.
-    const fetchImage = !isEditing
+    // query-driving fields (title, category, notes) have changed — but NEVER
+    // for a default-origin card: its image is locked, so edits keep it.
+    const fetchImage = !fromDefault && (
+      !isEditing
       || game.name !== trimmedName
       || game.category !== category
-      || (game.notes || "") !== trimmedNotes;
+      || (game.notes || "") !== trimmedNotes
+    );
 
     const next = {
-      id: game?.id || `g-${Date.now()}`,
+      id: game?.id || (crypto?.randomUUID ? crypto.randomUUID() : `g-${Date.now()}`),
+      userId: game?.userId,
+      fromDefault,
       name: trimmedName,
       category,
       emoji: CATEGORY_EMOJI[category],
@@ -1909,7 +1966,7 @@ export default function App() {
   const [editing, setEditing] = useState(null); // null | 'new' | game object
   const [user, setUser] = useState(null);
   const [authMode, setAuthMode] = useState(null); // null | 'signup' | 'login'
-  const { games, addOrUpdate, remove, refreshImage, rename, setFavorite } = useGameLibrary();
+  const { games, addOrUpdate, remove, refreshImage, rename, setFavorite } = useGameLibrary(user);
 
   // Track the Supabase auth session. The moment a user is signed in (via
   // signup, login, or a restored session), drop all gating: every gate is
