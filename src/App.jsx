@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Home as HomeIcon, Library as LibraryIcon,
   ArrowLeft, Pencil, Trash2, Plus, Users, RefreshCw,
-  Lock, LockOpen, ChevronDown,
+  Lock, LockOpen, ChevronDown, Eye, EyeOff,
 } from "lucide-react";
 import { supabase, callFn } from "./lib/supabase";
 
@@ -1868,6 +1868,7 @@ function AuthModal({ mode, onClose, onSwitch, onAuthed }) {
   const [email, setEmail] = useState(remembered?.email || "");
   const [password, setPassword] = useState(remembered?.password || "");
   const [remember, setRemember] = useState(!!remembered);
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
   const [loading, setLoading] = useState(false);
@@ -1925,11 +1926,26 @@ function AuthModal({ mode, onClose, onSwitch, onAuthed }) {
             style={authInput} type="email" placeholder="Email address" autoComplete="email"
             value={email} onChange={(e) => setEmail(e.target.value)}
           />
-          <input
-            style={authInput} type="password" placeholder="Password"
-            autoComplete={isSignup ? "new-password" : "current-password"}
-            value={password} onChange={(e) => setPassword(e.target.value)}
-          />
+          <div style={{ position: "relative" }}>
+            <input
+              style={{ ...authInput, paddingRight: 44 }}
+              type={showPassword ? "text" : "password"} placeholder="Password"
+              autoComplete={isSignup ? "new-password" : "current-password"}
+              value={password} onChange={(e) => setPassword(e.target.value)}
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((s) => !s)}
+              aria-label={showPassword ? "Hide password" : "Show password"}
+              style={{
+                position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)",
+                background: "none", border: "none", cursor: "pointer", padding: 4,
+                display: "flex", color: "#9a9a9e",
+              }}
+            >
+              {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+            </button>
+          </div>
           {!isSignup && (
             <label style={{
               display: "flex", alignItems: "center", gap: 8,
@@ -1995,17 +2011,10 @@ export default function App() {
     spinCountRef.current += 1;
     if (spinCountRef.current % 5 === 0) setAuthMode("signup");
   };
-  // Header "Log In": if credentials were remembered on this device, log in
-  // automatically; otherwise open the Welcome Back modal (pre-filled if saved).
-  const handleLogIn = async () => {
-    const saved = loadRemembered();
-    if (saved?.email && saved?.password) {
-      const { error } = await supabase.auth.signInWithPassword({ email: saved.email, password: saved.password });
-      if (error) setAuthMode("login"); // saved creds no longer valid — show the modal
-    } else {
-      setAuthMode("login");
-    }
-  };
+  // Header "Log In" always opens the Welcome Back modal. If "Remember Me" was
+  // used, the modal pre-fills email + password (password masked, with a
+  // show/hide toggle) — the user still confirms by tapping Log In.
+  const handleLogIn = () => setAuthMode("login");
 
   const onSave = (g, options) => {
     addOrUpdate(g, options);
