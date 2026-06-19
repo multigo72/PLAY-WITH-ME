@@ -55,7 +55,7 @@ const F = {
 
 // ─── Categories + emoji map ──────────────────────────────────────────────
 const CATEGORIES = [
-  "Board Games", "Card Games", "Puzzles", "Toy",
+  "Board Games", "Card Games", "Puzzles", "Toys",
   "Active", "Video Games", "Creativity", "Buy Suggestions", "Other",
 ];
 
@@ -63,7 +63,7 @@ const CATEGORY_EMOJI = {
   "Board Games": "♟️",
   "Card Games": "🃏",
   "Puzzles": "🧩",
-  "Toy": "🧸",
+  "Toys": "🧸",
   "Active": "🌳",
   "Video Games": "🎮",
   "Creativity": "🎨",
@@ -78,6 +78,7 @@ const LEGACY_CATEGORY = {
   "Board Game": "Board Games",
   "Card Game": "Card Games",
   "Video Game": "Video Games",
+  "Toy": "Toys",
 };
 
 // ─── Image resolution: Firecrawl (Amazon) via Supabase Edge Function ────
