@@ -1872,6 +1872,13 @@ function AuthModal({ mode, onClose, onSwitch, onAuthed }) {
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
   const [loading, setLoading] = useState(false);
+  // After a successful signup, the Create Account button stays disabled until
+  // the user edits one of the fields (prevents duplicate submissions).
+  const [accountCreated, setAccountCreated] = useState(false);
+  const onEdit = (setter) => (e) => {
+    setter(e.target.value);
+    if (accountCreated) { setAccountCreated(false); setInfo(""); }
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -1889,8 +1896,10 @@ function AuthModal({ mode, onClose, onSwitch, onAuthed }) {
           options: { data: { full_name: fullName.trim() } },
         });
         if (error) setError(error.message);
-        else if (!data.session) setInfo("Account created! Check your email to confirm, then log in.");
-        else onAuthed();
+        else if (!data.session) {
+          setInfo("Account created! Check your email to confirm, then log in.");
+          setAccountCreated(true); // disable the button until a field is edited
+        } else onAuthed();
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
         if (error) setError(error.message);
@@ -1919,19 +1928,19 @@ function AuthModal({ mode, onClose, onSwitch, onAuthed }) {
           {isSignup && (
             <input
               style={authInput} placeholder="Full name" autoComplete="name"
-              value={fullName} onChange={(e) => setFullName(e.target.value)}
+              value={fullName} onChange={onEdit(setFullName)}
             />
           )}
           <input
             style={authInput} type="email" placeholder="Email address" autoComplete="email"
-            value={email} onChange={(e) => setEmail(e.target.value)}
+            value={email} onChange={onEdit(setEmail)}
           />
           <div style={{ position: "relative" }}>
             <input
               style={{ ...authInput, paddingRight: 44 }}
               type={showPassword ? "text" : "password"} placeholder="Password"
               autoComplete={isSignup ? "new-password" : "current-password"}
-              value={password} onChange={(e) => setPassword(e.target.value)}
+              value={password} onChange={onEdit(setPassword)}
             />
             <button
               type="button"
@@ -1961,7 +1970,15 @@ function AuthModal({ mode, onClose, onSwitch, onAuthed }) {
           )}
           {error && <p style={{ margin: 0, color: "#ff6b6b", fontFamily: F.body, fontSize: 13 }}>{error}</p>}
           {info && <p style={{ margin: 0, color: "#7bd88f", fontFamily: F.body, fontSize: 13 }}>{info}</p>}
-          <button type="submit" style={{ ...authPrimaryBtn, opacity: loading ? 0.7 : 1 }} disabled={loading}>
+          <button
+            type="submit"
+            disabled={loading || (isSignup && accountCreated)}
+            style={{
+              ...authPrimaryBtn,
+              opacity: (loading || (isSignup && accountCreated)) ? 0.55 : 1,
+              cursor: (loading || (isSignup && accountCreated)) ? "default" : "pointer",
+            }}
+          >
             {loading ? "Please wait…" : isSignup ? "Create Account" : "Log In"}
           </button>
         </form>
