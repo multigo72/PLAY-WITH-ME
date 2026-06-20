@@ -208,6 +208,14 @@ async function resolveGameCardImage(card, { excludeUrls } = {}) {
   return result || FALLBACK_RESULT;
 }
 
+// ─── Admin ───────────────────────────────────────────────────────────────
+// The single admin account. When this user is signed in, the app reads AND
+// writes the global public.default_catalog instead of a personal library, so
+// edits here become the starting set every NEW account is seeded with. RLS
+// enforces the write access server-side (this check is only for UI routing).
+const ADMIN_EMAIL = "mckemery@comcast.net";
+const isAdminUser = (user) => (user?.email || "").toLowerCase() === ADMIN_EMAIL;
+
 // ─── Supabase-backed library hook ────────────────────────────────────────
 // Library lives in the public.games table. We map the snake_case DB row
 // to the camelCase shape used throughout the React tree.
@@ -257,6 +265,10 @@ function gameToRow(g) {
 
 function useGameLibrary(user) {
   const userId = user?.id ?? null;
+  // Admin edits the shared catalog; everyone else reads/writes their own
+  // RLS-isolated library (or the read-only catalog when signed out).
+  const isAdmin = isAdminUser(user);
+  const TABLE = isAdmin ? "default_catalog" : "games";
   const [games, setGames] = useState([]);
   const [loaded, setLoaded] = useState(false);
   // Track ids we've already kicked off a backfill for so we don't loop.
@@ -283,7 +295,9 @@ function useGameLibrary(user) {
     backfilledRef.current = new Set();
     (async () => {
       // Newest cards first — Add-to-Library lands at the top of the list.
-      const { data, error } = userId
+      // Admin and guests both read the global catalog; a normal signed-in
+      // user reads their own per-account library.
+      const { data, error } = (userId && !isAdmin)
         ? await supabase.from("games").select("*").eq("user_id", userId)
             .order("created_at", { ascending: false })
         : await supabase.from("default_catalog").select("*")
@@ -300,7 +314,7 @@ function useGameLibrary(user) {
       setLoaded(true);
     })();
     return () => { cancelled = true; };
-  }, [userId]);
+  }, [userId, isAdmin]);
 
   // Helper: patch a row in DB + local state.
   const patchById = async (id, patch) => {
@@ -315,11 +329,19 @@ function useGameLibrary(user) {
     if ("ages" in patch) dbPatch.ages = patch.ages;
     if ("favorite" in patch) dbPatch.favorite = patch.favorite;
     if (Object.keys(dbPatch).length === 0) return;
-    const { error } = await supabase.from("games").update(dbPatch).eq("id", id);
+    const { error } = await supabase.from(TABLE).update(dbPatch).eq("id", id);
     if (error) {
       // eslint-disable-next-line no-console
       console.error(`[library] patch ${id} failed:`, error.message);
     }
+  };
+
+  // default_catalog has no user_id / from_default columns — strip them when
+  // the admin is writing to the catalog so the upsert matches its schema.
+  const toRow = (g) => {
+    const row = gameToRow(g);
+    if (isAdmin) { delete row.user_id; delete row.from_default; }
+    return row;
   };
 
   // Runs the image resolution chain for a card and writes the result back
@@ -375,7 +397,7 @@ function useGameLibrary(user) {
       ? prev.map(g => g.id === next.id ? next : g)
       : [next, ...prev]);
 
-    const { error } = await supabase.from("games").upsert(gameToRow(next));
+    const { error } = await supabase.from(TABLE).upsert(toRow(next));
     if (error) {
       // eslint-disable-next-line no-console
       console.error("[library] upsert failed:", error.message);
@@ -400,7 +422,7 @@ function useGameLibrary(user) {
 
   const remove = async (id) => {
     setGames(prev => prev.filter(g => g.id !== id));
-    const { error } = await supabase.from("games").delete().eq("id", id);
+    const { error } = await supabase.from(TABLE).delete().eq("id", id);
     if (error) {
       // eslint-disable-next-line no-console
       console.error(`[library] delete ${id} failed:`, error.message);
@@ -422,7 +444,7 @@ function useGameLibrary(user) {
     });
     if (!prev || prev.name === clean) return;
     const { error } = await supabase
-      .from("games")
+      .from(TABLE)
       .update({ name: clean })
       .eq("id", id);
     if (error) {
@@ -499,8 +521,10 @@ function useGameLibrary(user) {
   // session (tracked in backfilledRef) so re-renders don't restart it.
   useEffect(() => {
     // Guests view the read-only catalog (can't write), and default-origin
-    // cards have a locked image — neither gets backfilled.
-    if (!loaded || !userId) return;
+    // cards have a locked image — neither gets backfilled. The admin edits the
+    // catalog directly, so skip auto-backfill there too: curated catalog
+    // images are only changed by an explicit Add/refresh, never automatically.
+    if (!loaded || !userId || isAdmin) return;
     for (const g of games) {
       if (g.fromDefault) continue;
       // Skip cards that already have an image we don't want to clobber:
@@ -1513,7 +1537,7 @@ const metaText = {
   whiteSpace: "nowrap",
 };
 
-function LibraryScreen({ library, isGuest, onRequireAccount, onAdd, onEdit, onDelete, onRefresh, onRename, onFavorite }) {
+function LibraryScreen({ library, isGuest, isAdmin, onRequireAccount, onAdd, onEdit, onDelete, onRefresh, onRename, onFavorite }) {
   const [filter, setFilter] = useState("All");
   const filtered = filter === "All"
     ? library
@@ -1540,10 +1564,26 @@ function LibraryScreen({ library, isGuest, onRequireAccount, onAdd, onEdit, onDe
           padding: "4px 0 8px",
           display: "flex", alignItems: "center", justifyContent: "space-between",
         }}>
-          <h1 style={{
-            margin: 0, fontFamily: F.display, fontWeight: 800, fontSize: 24,
-            color: C.background, lineHeight: 1,
-          }}>My Game Library</h1>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <h1 style={{
+              margin: 0, fontFamily: F.display, fontWeight: 800, fontSize: 24,
+              color: C.background, lineHeight: 1,
+            }}>{isAdmin ? "Default Catalog" : "My Game Library"}</h1>
+            {isAdmin && (
+              <span style={{
+                fontFamily: F.body, fontWeight: 700, fontSize: 11,
+                letterSpacing: 0.3, color: C.background, opacity: 0.92,
+                display: "inline-flex", alignItems: "center", gap: 6,
+              }}>
+                <span style={{
+                  background: C.background, color: C.primary,
+                  borderRadius: 4, padding: "1px 6px", fontWeight: 800,
+                  fontSize: 10, letterSpacing: 0.5,
+                }}>ADMIN</span>
+                Editing the set every new account starts with
+              </span>
+            )}
+          </div>
           {/* Add-game button (replaces the avatar circle). Same 40x40
               footprint and position so the header layout is unchanged.
               Inline-rendered (circle outline + plus icon) instead of the
@@ -1999,6 +2039,10 @@ export default function App() {
   const [editing, setEditing] = useState(null); // null | 'new' | game object
   const [user, setUser] = useState(null);
   const [authMode, setAuthMode] = useState(null); // null | 'signup' | 'login'
+  // When the admin is signed in, the library hook reads/writes the global
+  // default_catalog — so the Library screen is actually editing the catalog
+  // every new account is seeded with. Surface that clearly in the UI.
+  const isAdmin = isAdminUser(user);
   const { games, addOrUpdate, remove, refreshImage, rename, setFavorite } = useGameLibrary(user);
 
   // Track the Supabase auth session. The moment a user is signed in (via
@@ -2104,6 +2148,7 @@ export default function App() {
           : <LibraryScreen
               library={games}
               isGuest={!user}
+              isAdmin={isAdmin}
               onRequireAccount={() => setAuthMode("signup")}
               onAdd={() => setEditing("new")}
               onEdit={(g) => setEditing(g)}
